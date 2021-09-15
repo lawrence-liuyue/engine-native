@@ -63,9 +63,12 @@ void linearToSrgb(gfx::Color *out, const gfx::Color &linear) {
 
 const String             STAGE_NAME         = "LightingStage";
 const uint               MAX_REFLECTOR_SIZE = 5;
+const uint               SSPR_RESOLUTION = 512;
+const uint               MIPMAP_LEVEL = 8;
 framegraph::StringHandle reflectTexHandle   = framegraph::FrameGraph::stringToHandle("reflectionTex");
 framegraph::StringHandle denoiseTexHandle[MAX_REFLECTOR_SIZE];
 framegraph::StringHandle ssprClearPass[MAX_REFLECTOR_SIZE];
+framegraph::StringHandle ssprMipmapPass[MAX_REFLECTOR_SIZE];
 framegraph::StringHandle ssprCompReflectPass[MAX_REFLECTOR_SIZE];
 framegraph::StringHandle ssprCompDenoisePass[MAX_REFLECTOR_SIZE];
 framegraph::StringHandle ssprRenderPass[MAX_REFLECTOR_SIZE];
@@ -78,6 +81,9 @@ void initStrHandle() {
 
         tmp              = std::string("ssprClearPss") + std::to_string(i);
         ssprClearPass[i] = framegraph::FrameGraph::stringToHandle(tmp.c_str());
+
+        tmp              = std::string("ssprMipmapPass") + std::to_string(i);
+        ssprMipmapPass[i] = framegraph::FrameGraph::stringToHandle(tmp.c_str());
 
         tmp                    = std::string("ssprReflectPass") + std::to_string(i);
         ssprCompReflectPass[i] = framegraph::FrameGraph::stringToHandle(tmp.c_str());
@@ -112,6 +118,24 @@ bool LightingStage::initialize(const RenderStageInfo &info) {
     _phaseID                = getPhaseID("default");
     _reflectionPhaseID      = getPhaseID("reflection");
     initStrHandle();
+
+    gfx::TextureBarrierInfo bInfoBefore = {
+        {
+            gfx::AccessType::COMPUTE_SHADER_WRITE,
+        },
+        {
+            gfx::AccessType::TRANSFER_WRITE,
+        }};
+
+    gfx::TextureBarrierInfo bInfoAfter = {
+        {
+            gfx::AccessType::TRANSFER_WRITE,
+        },
+        {
+            gfx::AccessType::COMPUTE_SHADER_READ_TEXTURE,
+        }};
+    _ssprMipmapPassBarrierBefore.push_back(_device->getTextureBarrier(bInfoBefore));
+    _ssprMipmapPassBarrierAfter.push_back(_device->getTextureBarrier(bInfoAfter));
 
     return true;
 }
@@ -551,15 +575,15 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
     _reflectionElems.clear();
 
     // step 1 prepare clear model's reflection texture pass. should switch to image clear command after available
-    uint minSize   = 512;
-    _ssprTexWidth  = pipeline->getWidth();
-    _ssprTexHeight = pipeline->getHeight();
+    uint minSize   = SSPR_RESOLUTION;
+    uint width  = pipeline->getWidth();
+    uint height = pipeline->getHeight();
     if (_ssprTexHeight < _ssprTexWidth) {
-        _ssprTexWidth  = minSize * _ssprTexWidth / _ssprTexHeight;
+        _ssprTexWidth  = minSize * width / height;
         _ssprTexHeight = minSize;
     } else {
         _ssprTexWidth  = minSize;
-        _ssprTexHeight = minSize * _ssprTexHeight / _ssprTexWidth;
+        _ssprTexHeight = minSize * height / width;
     }
 
     struct DataClear {
@@ -572,6 +596,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         colorTexInfo.usage  = gfx::TextureUsageBit::STORAGE | gfx::TextureUsageBit::SAMPLED | gfx::TextureUsageBit::TRANSFER_SRC | gfx::TextureUsageBit::TRANSFER_DST;
         colorTexInfo.width  = _ssprTexWidth;
         colorTexInfo.height = _ssprTexHeight;
+        colorTexInfo.levelCount = 9;
         data.reflection     = builder.create<framegraph::Texture>(reflectTexHandle, colorTexInfo);
 
         framegraph::RenderTargetAttachment::Descriptor colorAttachmentInfo;
@@ -611,6 +636,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
             colorTexInfo.usage  = gfx::TextureUsageBit::STORAGE | gfx::TextureUsageBit::SAMPLED | gfx::TextureUsageBit::TRANSFER_SRC | gfx::TextureUsageBit::TRANSFER_DST;
             colorTexInfo.width  = _ssprTexWidth;
             colorTexInfo.height = _ssprTexHeight;
+            colorTexInfo.levelCount = 5;
             data.reflection     = builder.create<framegraph::Texture>(reflectTexHandle, colorTexInfo);
         }
 
@@ -657,6 +683,45 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         cmdBuff->bindPipelineState(const_cast<gfx::PipelineState *>(_reflectionComp->getPipelineState()));
         cmdBuff->bindDescriptorSet(globalSet, reflectDesc);
         cmdBuff->dispatch(_reflectionComp->getDispatchInfo());
+    };
+
+    // before denoise, mipmap the reflection texture
+    struct DataMipmap {
+        framegraph::TextureHandle reflection;
+    };
+
+    auto texMipmapSetup = [&](framegraph::PassNodeBuilder &builder, DataMipmap &data) {
+        data.reflection = builder.read(framegraph::TextureHandle(builder.readFromBlackboard(reflectTexHandle)));
+        builder.writeToBlackboard(reflectTexHandle, data.reflection);
+
+        data.reflection = builder.write(data.reflection);
+        builder.writeToBlackboard(reflectTexHandle, data.reflection);
+    };
+
+    auto texMipmapExec = [this](DataMipmap const &data, const framegraph::DevicePassResourceTable &table) {
+        auto *pipeline = static_cast<DeferredPipeline *>(_pipeline);
+        auto *commandBuffer = pipeline->getCommandBuffers()[0];
+        auto *reflectionTex = static_cast<gfx::Texture *>(table.getRead(data.reflection));
+
+        uint width = _ssprTexWidth;
+        uint height = _ssprTexHeight;
+        for (uint i = 0; i < MIPMAP_LEVEL; ++i) {
+            commandBuffer->pipelineBarrier(nullptr, _ssprMipmapPassBarrierBefore, {reflectionTex});
+
+            gfx::TextureBlit region;
+            region.srcSubres = {i, 0, 1};
+            region.srcExtent.width  = width;
+            region.srcExtent.height = height;
+            region.dstSubres = {i + 1, 0, 1};
+            region.dstExtent.width  = width >> 2;
+            region.dstExtent.height = height >> 2;
+            commandBuffer->blitTexture(reflectionTex, reflectionTex, &region, 1, gfx::Filter::LINEAR);
+
+            commandBuffer->pipelineBarrier(nullptr, _ssprMipmapPassBarrierAfter, {reflectionTex});
+
+            width >> 2;
+            height >> 2;
+        }
     };
 
     // step 3 prepare compute the denoise pass, contain 1 dispatch commands, compute pipeline
@@ -707,7 +772,12 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         elem.set->bindSampler(static_cast<uint>(ModelLocalBindings::SAMPLER_REFLECTION), _defaultSampler);
         elem.set->update();
 
-        cmdBuff->bindPipelineState(const_cast<gfx::PipelineState *>(_reflectionComp->getDenoisePipelineState()));
+        if (!elem.useMipmap) {
+            cmdBuff->bindPipelineState(const_cast<gfx::PipelineState *>(_reflectionComp->getDenoisePipelineState()));
+        } else {
+            cmdBuff->bindPipelineState(const_cast<gfx::PipelineState *>(_reflectionComp->getDenoisePipelineStateMipmap()));
+        }
+
         cmdBuff->bindDescriptorSet(globalSet, const_cast<gfx::DescriptorSet *>(_reflectionComp->getDenoiseDescriptorSet()));
         cmdBuff->bindDescriptorSet(materialSet, elem.set);
         cmdBuff->dispatch(_reflectionComp->getDenioseDispatchInfo());
@@ -796,7 +866,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
             for (p = 0; p < passCount; ++p) {
                 auto *pass = passes[p];
                 if (pass->getPhase() == _reflectionPhaseID) {
-                    RenderElem elem = {ro, subModel->getDescriptorSet(), m, p};
+                    RenderElem elem = {ro, subModel->getDescriptorSet(), m, p, pass->getUseMipmap()};
                     _reflectionElems.push_back(elem);
                 }
             }
@@ -808,6 +878,12 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         // add clear and comp passes here
         pipeline->getFrameGraph().addPass<DataClear>(insertPoint++, ssprClearPass[i], clearSetup, clearExec);
         pipeline->getFrameGraph().addPass<DataCompReflect>(insertPoint++, ssprCompReflectPass[i], compReflectSetup, compReflectExec);
+
+        // only if the macro USE_MIPMAP is enabled, mipmap pass is needed
+        if (_reflectionElems[i].useMipmap) {
+            pipeline->getFrameGraph().addPass<DataMipmap>(insertPoint++, ssprMipmapPass[i], texMipmapSetup, texMipmapExec);
+        }
+
         pipeline->getFrameGraph().addPass<DataCompDenoise>(insertPoint++, ssprCompDenoisePass[i], compDenoiseSetup, compDenoiseExec);
     }
 

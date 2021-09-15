@@ -1,8 +1,8 @@
 /****************************************************************************
  Copyright (c) 2021 Xiamen Yaji Software Co., Ltd.
- 
+
  http://www.cocos.com
- 
+
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated engine source code (the "Software"), a limited,
  worldwide, royalty-free, non-assignable, revocable and non-exclusive license
@@ -10,10 +10,10 @@
  not use Cocos Creator software for developing other software or tools that's
  used for developing games. You are not granted to publish, distribute,
  sublicense, and/or sell copies of Cocos Creator.
- 
+
  The software or tools in this License Agreement are licensed, not sold.
  Xiamen Yaji Software Co., Ltd. reserves all rights not expressly granted to you.
- 
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -75,6 +75,7 @@ public:
         _rootBlock  = block;
     }
     inline void setRootBufferDirty(bool val) { _rootBufferDirty = val; }
+    inline void setUseMipmap() { _useMipmap = true; }
 
     inline BatchingSchemes          getBatchingScheme() const { return _passLayout->batchingScheme; }
     inline gfx::BlendState *        getBlendState() const { return _blendState; }
@@ -88,9 +89,10 @@ public:
     inline RenderPriority           getPriority() const { return _passLayout->priority; }
     inline gfx::RasterizerState *   getRasterizerState() const { return _rasterizerState; }
     inline RenderPassStage          getStage() const { return _passLayout->stage; }
-
+    inline bool                     getUseMipmap() const { return _useMipmap; }
 private:
     bool                    _rootBufferDirty{false};
+    bool                    _useMipmap{false};
     PassLayout *            _passLayout{nullptr};
     gfx::RasterizerState *  _rasterizerState{nullptr};
     gfx::DepthStencilState *_depthStencilState{nullptr};

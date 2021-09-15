@@ -28,6 +28,8 @@
 #include "../RenderStage.h"
 #include "ReflectionComp.h"
 #include "scene/Camera.h"
+#include "renderer/gfx-base/GFXDef.h"
+#include "renderer/gfx-base/GFXDevice.h"
 
 namespace cc {
 namespace pipeline {
@@ -45,6 +47,7 @@ struct RenderElem {
     gfx::DescriptorSet *set;
     uint                modelIndex;
     uint                passIndex;
+    bool                useMipmap;
 };
 
 class CC_DLL LightingStage : public RenderStage {
@@ -96,6 +99,10 @@ private:
     uint _ssprTexWidth  = 0;
     uint _ssprTexHeight = 0;
     Mat4 _matViewProj;
+
+    // mipmap blit barrier
+    gfx::TextureBarrierList _ssprMipmapPassBarrierBefore;
+    gfx::TextureBarrierList _ssprMipmapPassBarrierAfter;
 };
 
 } // namespace pipeline

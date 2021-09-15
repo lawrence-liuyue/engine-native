@@ -14,9 +14,11 @@ ReflectionComp::~ReflectionComp() {
     CC_SAFE_DESTROY(_compDescriptorSet);
 
     CC_SAFE_DESTROY(_compDenoiseShader);
+    CC_SAFE_DESTROY(_compDenoiseShaderMipmap);
     CC_SAFE_DESTROY(_compDenoiseDescriptorSetLayout);
     CC_SAFE_DESTROY(_compDenoisePipelineLayout);
     CC_SAFE_DESTROY(_compDenoisePipelineState);
+    CC_SAFE_DESTROY(_compDenoisePipelineStateMipmap);
     CC_SAFE_DESTROY(_compDenoiseDescriptorSet);
 
     CC_SAFE_DESTROY(_localDescriptorSetLayout);
@@ -106,6 +108,7 @@ void ReflectionComp::init(gfx::Device *dev, uint groupSizeX, uint groupSizeY) {
 
     initReflectionRes();
     initDenoiseRes();
+    initDenoiseResMipmap();
 }
 
 void ReflectionComp::initReflectionRes() {
@@ -138,10 +141,7 @@ void ReflectionComp::initReflectionRes() {
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
 
             vec3 reflectedPosWS = posWS;
-            reflectedPosWS.y = reflectedPosWS.y - _HorizontalPlaneHeightWS;
-            reflectedPosWS.y = reflectedPosWS.y * -1.0;
-            reflectedPosWS.y = reflectedPosWS.y + _HorizontalPlaneHeightWS;
-
+            reflectedPosWS.y = _HorizontalPlaneHeightWS + _HorizontalPlaneHeightWS - reflectedPosWS.y;
 
             vec4 reflectedPosCS = matViewProj * vec4(reflectedPosWS, 1);
             vec2 reflectedPosNDCxy = reflectedPosCS.xy / reflectedPosCS.w;//posCS -> posNDC
@@ -178,10 +178,7 @@ void ReflectionComp::initReflectionRes() {
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
 
             vec3 reflectedPosWS = posWS;
-            reflectedPosWS.y = reflectedPosWS.y - _HorizontalPlaneHeightWS;
-            reflectedPosWS.y = reflectedPosWS.y * -1.0;
-            reflectedPosWS.y = reflectedPosWS.y + _HorizontalPlaneHeightWS;
-
+            reflectedPosWS.y = _HorizontalPlaneHeightWS + _HorizontalPlaneHeightWS - reflectedPosWS.y;
 
             vec4 reflectedPosCS = matViewProj * vec4(reflectedPosWS, 1);
             vec2 reflectedPosNDCxy = reflectedPosCS.xy / reflectedPosCS.w;//posCS -> posNDC
@@ -254,7 +251,6 @@ void ReflectionComp::initDenoiseRes() {
             imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
             imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
             imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
-
         })",
         _groupSizeX, _groupSizeY);
     sources.glsl3 = StringUtil::format(
@@ -280,7 +276,6 @@ void ReflectionComp::initDenoiseRes() {
             imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
             imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
             imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
-
         })",
         _groupSizeX, _groupSizeY);
     // no compute support in GLES2
@@ -309,6 +304,154 @@ void ReflectionComp::initDenoiseRes() {
     pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
 
     _compDenoisePipelineState = _device->createPipelineState(pipelineInfo);
+}
+
+void ReflectionComp::initDenoiseResMipmap() {
+    ShaderSources<ComputeShaderSource> sources;
+    sources.glsl4 = StringUtil::format(
+        R"(
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
+        layout(set = 1, binding = 12, rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        void main() {
+            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
+            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
+            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
+            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+
+            vec4 best = center;
+            best = right.a > best.a + 0.1 ? right : best;
+            best = bottom.a > best.a + 0.1 ? bottom : best;
+            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+
+            int mlevel = 6;
+            ivec2 _id = id / 64;
+
+            vec4 cVal = best.a > center.a + 0.1 ? best : center;
+            if (cVal.xyz != vec3(0,0,0)) {
+                cVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(0, 0), cVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(0, 0), tmp);
+            }
+
+            vec4 rVal = best.a > right.a + 0.1 ? best : right;
+            if (rVal.xyz != vec3(0,0,0)) {
+                rVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(0, 1), rVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(0, 1), tmp);
+            }
+
+            vec4 bVal = best.a > bottom.a + 0.1 ? best : bottom;
+            if (bVal.xyz != vec3(0,0,0)) {
+                cVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(1, 0), bVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(1, 0), tmp);
+            }
+
+            vec4 brVal = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+            if (brVal.xyz != vec3(0,0,0)) {
+                cVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(1, 1), brVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(1, 1), tmp);
+            }
+        })",
+        _groupSizeX, _groupSizeY);
+    sources.glsl3 = StringUtil::format(
+        R"(
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        uniform sampler2D reflectionTex;
+        layout(rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        void main() {
+            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
+            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
+            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
+            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+
+            vec4 best = center;
+            best = right.a > best.a + 0.1 ? right : best;
+            best = bottom.a > best.a + 0.1 ? bottom : best;
+            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+
+            int mlevel = 4;
+            ivec2 _id = id / 16;
+
+            vec4 cVal = best.a > center.a + 0.1 ? best : center;
+            if (cVal.xyz != vec3(0,0,0)) {
+                cVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(0, 0), cVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(0, 0), tmp);
+            }
+
+            vec4 rVal = best.a > right.a + 0.1 ? best : right;
+            if (rVal.xyz != vec3(0,0,0)) {
+                rVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(0, 1), rVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(0, 1), tmp);
+            }
+
+            vec4 bVal = best.a > bottom.a + 0.1 ? best : bottom;
+            if (bVal.xyz != vec3(0,0,0)) {
+                cVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(1, 0), bVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(1, 0), tmp);
+            }
+
+            vec4 brVal = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+            if (brVal.xyz != vec3(0,0,0)) {
+                cVal.a = 1.0;
+                imageStore(denoiseTex, id + ivec2(1, 1), brVal);
+            } else {
+                vec4 tmp = texelFetch(reflectionTex, _id, mlevel);
+                tmp.a = 0.0;
+                imageStore(denoiseTex, id + ivec2(1, 1), tmp);
+            }
+        })",
+        _groupSizeX, _groupSizeY);
+    // no compute support in GLES2
+
+    gfx::ShaderInfo shaderInfo;
+    shaderInfo.name            = "Compute ";
+    shaderInfo.stages          = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
+    shaderInfo.blocks          = {};
+    shaderInfo.samplerTextures = {
+        {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1}};
+    shaderInfo.images = {
+        {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
+    _compDenoiseShaderMipmap = _device->createShader(shaderInfo);
+
+    gfx::PipelineStateInfo pipelineInfo;
+    pipelineInfo.shader         = _compDenoiseShaderMipmap;
+    pipelineInfo.pipelineLayout = _compDenoisePipelineLayout;
+    pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
+
+    _compDenoisePipelineStateMipmap = _device->createPipelineState(pipelineInfo);
 }
 
 template <typename T>

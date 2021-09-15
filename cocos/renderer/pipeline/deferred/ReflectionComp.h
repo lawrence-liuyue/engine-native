@@ -26,12 +26,14 @@ public:
     void init(gfx::Device* dev, uint groupSizeX, uint groupSizeY);
     void initReflectionRes();
     void initDenoiseRes();
+    void initDenoiseResMipmap();
     void applyTexSize(uint width, uint height, const Mat4& matViewProj);
 
     inline gfx::DescriptorSet*      getDescriptorSet() { return _compDescriptorSet; }
     inline const gfx::PipelineState*      getPipelineState() { return _compPipelineState; }
     inline gfx::DescriptorSet*      getDenoiseDescriptorSet() { return _compDenoiseDescriptorSet; }
     inline const gfx::PipelineState*      getDenoisePipelineState() { return _compDenoisePipelineState; }
+    inline const gfx::PipelineState*      getDenoisePipelineStateMipmap() { return _compDenoisePipelineStateMipmap; }
     inline const gfx::GlobalBarrier*      getBarrierPre() { return _barrierPre; }
     inline const gfx::TextureBarrierList& getBarrierBeforeDenoise() { return _barrierBeforeDenoise; }
     inline const gfx::TextureBarrierList& getBarrierAfterDenoise() { return _barrierAfterDenoise; }
@@ -55,9 +57,11 @@ private:
     gfx::DescriptorSet*       _compDescriptorSet{nullptr};
 
     gfx::Shader*              _compDenoiseShader{nullptr};
+    gfx::Shader*              _compDenoiseShaderMipmap{nullptr};
     gfx::DescriptorSetLayout* _compDenoiseDescriptorSetLayout{nullptr};
     gfx::PipelineLayout*      _compDenoisePipelineLayout{nullptr};
     gfx::PipelineState*       _compDenoisePipelineState{nullptr};
+    gfx::PipelineState*       _compDenoisePipelineStateMipmap{nullptr};
     gfx::DescriptorSet*       _compDenoiseDescriptorSet{nullptr};
 
     gfx::DescriptorSetLayout* _localDescriptorSetLayout{nullptr};
