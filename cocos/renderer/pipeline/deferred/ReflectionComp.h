@@ -64,7 +64,6 @@ private:
 
     gfx::Buffer*  _compConstantsBuffer{nullptr};
     gfx::Sampler* _sampler{nullptr};
-    Mat4          _matViewProj;
 
     gfx::GlobalBarrier* _barrierPre{nullptr};
 

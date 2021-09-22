@@ -26,8 +26,11 @@ ReflectionComp::~ReflectionComp() {
 
 namespace {
 struct ConstantBuffer {
-    Mat4 matViewProj;
-    Vec2 texSize;
+    Mat4 matView;
+    Mat4 matViewProj;       // view projection矩阵
+    Mat4 matViewProjInv;    // view projection逆矩阵
+    Vec2 texSize;           // 反射纹理大小
+    Vec4 viewPort;          // lighting viewport
 };
 } // namespace
 
@@ -40,10 +43,9 @@ void ReflectionComp::applyTexSize(uint width, uint height, const Mat4& matViewPr
     _dispatchInfo        = {(globalWidth - 1) / groupWidth + 1, (globalHeight - 1) / groupHeight + 1, 1};
     _denoiseDispatchInfo = {((globalWidth - 1) / 2) / groupWidth + 1, ((globalHeight - 1) / 2) / groupHeight + 1, 1};
 
-    _matViewProj      = matViewProj;
     ConstantBuffer constants;
     constants.texSize     = {float(width), float(height)};
-    constants.matViewProj = _matViewProj;
+    constants.matViewProj = matViewProj;
 
     if (_compConstantsBuffer) {
         _compConstantsBuffer->update(&constants, sizeof(constants));
@@ -111,14 +113,21 @@ void ReflectionComp::init(gfx::Device *dev, uint groupSizeX, uint groupSizeY) {
 void ReflectionComp::initReflectionRes() {
     _compConstantsBuffer = _device->createBuffer({gfx::BufferUsage::UNIFORM,
                                                   gfx::MemoryUsage::DEVICE | gfx::MemoryUsage::HOST,
-                                                  (sizeof(Mat4) + sizeof(Vec2) + 15) / 16 * 16});
+                                                  (sizeof(Mat4) * 3 + sizeof(Vec2) + sizeof(Vec4) + 15) / 16 * 16});
 
     ShaderSources<ComputeShaderSource> sources;
     sources.glsl4 = StringUtil::format(
         R"(
         layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-        layout(set = 0, binding = 0) uniform Constants {  mat4 matViewProj; vec2 texSize; };
+        layout(set = 0, binding = 0) uniform Constants
+        {
+            mat4 matView;
+            mat4 matViewProj;
+            mat4 matViewProjInv;
+            vec2 texSize;
+            vec4 viewPort;
+        };
         layout(set = 0, binding = 1) uniform sampler2D lightingTex;
         layout(set = 0, binding = 2) uniform sampler2D worldPositionTex;
         layout(set = 0, binding = 3, rgba8) writeonly uniform lowp image2D reflectionTex;
@@ -158,7 +167,14 @@ void ReflectionComp::initReflectionRes() {
         R"(
         layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-        layout(std140) uniform Constants {  mat4 matViewProj; vec2 texSize; };
+        layout(std140) uniform Constants
+        {
+            mat4 matView;
+            mat4 matViewProj;
+            mat4 matViewProjInv;
+            vec2 texSize;
+            vec4 viewPort;
+        };
         uniform sampler2D lightingTex;
         uniform sampler2D worldPositionTex;
         layout(rgba8) writeonly uniform lowp image2D reflectionTex;
@@ -200,7 +216,13 @@ void ReflectionComp::initReflectionRes() {
     shaderInfo.name   = "Compute ";
     shaderInfo.stages = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
     shaderInfo.blocks = {
-        {0, 0, "Constants", {{"matViewProj", gfx::Type::MAT4, 1}, {"texSize", gfx::Type::FLOAT2, 1}}, 1},
+        {0, 0, "Constants", {
+            {"matView", gfx::Type::MAT4, 1},
+            {"matViewProj", gfx::Type::MAT4, 1},
+            {"matViewProjInv", gfx::Type::MAT4, 1},
+            {"texSize", gfx::Type::FLOAT2, 1},
+            {"viewPort", gfx::Type::FLOAT4, 1},
+            }, 1},
         {0, 4, "CCLocal", {{"cc_matWorld", gfx::Type::MAT4, 1}, {"cc_matWorldIT", gfx::Type::MAT4, 1}, {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1}}, 1}};
     shaderInfo.samplerTextures = {
         {0, 1, "lightingTex", gfx::Type::SAMPLER2D, 1},
@@ -235,7 +257,58 @@ void ReflectionComp::initDenoiseRes() {
         R"(
         layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
+        layout(set = 0, binding = 1) uniform samplerCube envMap;
+        layout(set = 0, binding = 2) uniform sampler2D pos;
+        layout(set = 0, binding = 3) uniform sampler2D depth;
+        layout(set = 0, binding = 4) uniform Constants
+        {
+            mat4 matView;
+            mat4 matViewProj;
+            mat4 matViewProjInv;
+            vec2 texSize;
+            vec4 viewPort;
+        };
+
+        layout(set = 0, binding = 5, std140) uniform CCLocal
+        {
+            mat4 cc_matWorld;
+            mat4 cc_matWorldIT;
+            vec4 cc_lightingMapUVParam;
+        };
+
         layout(set = 1, binding = 12, rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        vec4 screen2Eye(vec4 coord) {
+            vec4 ndc = vec4(
+                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                (coord.z + 1.0) / 2.0,
+                1.0
+            );
+
+            vec4 eye = matViewProjInv * ndc;
+            eye = eye / eye.w;
+            return eye;
+        }
+
+        vec3 calEnvmapUV(vec3 eyeCoord) {
+            vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
+            vec3 planeNornalES = normalize((matView * planeNornalWS).xyz);
+            vec3 incidence = normalize(-eyeCoord.xyz);
+            vec3 reflection = normalize(reflect(incidence, planeNornalES));
+            return normalize(incidence + reflection);
+        }
+
+        vec4 getEnvmap(ivec2 id) {
+            ivec2 screenSize = ivec2(960, 640);
+            vec2 uv = id / texSize;
+            float depth = texture(depth, uv).x;
+            vec2 screenPos = uv * screenSize;
+            vec3 posES = screen2Eye(vec4(screenPos, depth, 0)).xyz;
+            vec3 envmapUV = calEnvmapUV(posES);
+            vec4 envValue = texture(envMap, envmapUV);
+            return vec4(0,0,0,0);
+        }
 
         void main() {
             ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
@@ -250,10 +323,36 @@ void ReflectionComp::initDenoiseRes() {
             best = bottom.a > best.a + 0.1 ? bottom : best;
             best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
 
-            imageStore(denoiseTex, id + ivec2(0, 0), best.a > center.a + 0.1 ? best : center);
-            imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
-            imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
-            imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
+            vec4 envValue = getEnvmap(id);
+            if (envValue.xyz == vec3(0, 0,0 ))
+            {
+                envValue.xyz = vec3(1.0 , 0, 0);
+
+            }
+
+            vec4 res = best.a > center.a + 0.1 ? best : center;
+            if (res.xyz == vec3(0, 0, 0)) {
+                res = envValue;
+            }
+            imageStore(denoiseTex, id + ivec2(0, 0), res);
+
+            res = best.a > right.a + 0.1 ? best : right;
+            if (res.xyz == vec3(0, 0, 0)) {
+                res = envValue;
+            }
+            imageStore(denoiseTex, id + ivec2(0, 1), res);
+
+            res = best.a > bottom.a + 0.1 ? best : bottom;
+            if (res.xyz == vec3(0, 0, 0)) {
+                res = envValue;
+            }
+            imageStore(denoiseTex, id + ivec2(1, 0), res);
+
+            res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+            if (res.xyz == vec3(0, 0, 0)) {
+                res = envValue;
+            }
+            imageStore(denoiseTex, id + ivec2(1, 1), res);
 
         })",
         _groupSizeX, _groupSizeY);
@@ -261,6 +360,25 @@ void ReflectionComp::initDenoiseRes() {
         R"(
         layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         uniform sampler2D reflectionTex;
+        uniform samplerCube envMap;
+        uniform sampler2D pos;
+        uniform sampler2D depth;
+        layout(std140) uniform Constants
+        {
+            mat4 matView;
+            mat4 matViewProj;
+            mat4 matViewProjInv;
+            vec2 texSize;
+            vec4 viewPort;
+        };
+
+        layout(std140) uniform CCLocal
+        {
+            mat4 cc_matWorld;
+            mat4 cc_matWorldIT;
+            vec4 cc_lightingMapUVParam;
+        };
+
         layout(rgba8) writeonly uniform lowp image2D denoiseTex;
 
         void main() {
@@ -286,18 +404,35 @@ void ReflectionComp::initDenoiseRes() {
     // no compute support in GLES2
 
     gfx::ShaderInfo shaderInfo;
-    shaderInfo.name            = "Compute ";
+    shaderInfo.name            = "Compute";
     shaderInfo.stages          = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
-    shaderInfo.blocks          = {};
+    shaderInfo.blocks = {
+        {0, 4, "Constants", {
+            {"matView", gfx::Type::MAT4, 1},
+            {"matViewProj", gfx::Type::MAT4, 1},
+            {"matViewProjInv", gfx::Type::MAT4, 1},
+            {"texSize", gfx::Type::FLOAT2, 1},
+            {"viewPort", gfx::Type::FLOAT4, 1},
+            }, 1},
+        {0, 5, "CCLocal", {{"cc_matWorld", gfx::Type::MAT4, 1}, {"cc_matWorldIT", gfx::Type::MAT4, 1}, {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1}}, 1}};
+
     shaderInfo.samplerTextures = {
-        {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1}};
+        {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1},
+        {0, 1, "envMap", gfx::Type::SAMPLER_CUBE, 1},
+        {0, 0, "pos", gfx::Type::SAMPLER2D, 1},
+        {0, 0, "depth", gfx::Type::SAMPLER2D, 1},
+        };
     shaderInfo.images = {
         {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
     _compDenoiseShader = _device->createShader(shaderInfo);
 
     gfx::DescriptorSetLayoutInfo dslInfo;
     dslInfo.bindings.push_back({0, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({1, gfx::DescriptorType::STORAGE_IMAGE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({1, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({2, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({3, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({4, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({5, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
     _compDenoiseDescriptorSetLayout = _device->createDescriptorSetLayout(dslInfo);
     _compDenoisePipelineLayout      = _device->createPipelineLayout({{_compDenoiseDescriptorSetLayout, _localDescriptorSetLayout}});
 
