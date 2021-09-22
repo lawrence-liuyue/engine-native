@@ -375,8 +375,8 @@ void LightingStage::fgLightingPass(scene::Camera *camera) {
         vector<uint> dynamicOffsets = {0};
         cmdBuff->bindDescriptorSet(localSet, _descriptorSet, dynamicOffsets);
 
-        uint const globalOffsets[] = {pipeline->getPipelineUBO()->getCurrentCameraUBOOffset()};
-        cmdBuff->bindDescriptorSet(globalSet, pipeline->getDescriptorSet(), static_cast<uint>(std::size(globalOffsets)), globalOffsets);
+        const std::array<uint, 1> globalOffsets = {_pipeline->getPipelineUBO()->getCurrentCameraUBOOffset()};
+        cmdBuff->bindDescriptorSet(globalSet, pipeline->getDescriptorSet(), utils::toUint(globalOffsets.size()), globalOffsets.data());
         // get PSO and draw quad
         auto rendeArea = pipeline->getRenderArea(camera, false);
 
@@ -398,7 +398,7 @@ void LightingStage::fgLightingPass(scene::Camera *camera) {
         cmdBuff->draw(inputAssembler);
     };
 
-    pipeline->getFrameGraph().addPass<RenderData>(static_cast<uint>(DeferredInsertPoint::IP_LIGHTING), DeferredPipeline::fgStrHandleLightingPass, lightingSetup, lightingExec);
+    pipeline->getFrameGraph().addPass<RenderData>(static_cast<uint>(DeferredInsertPoint::DIP_LIGHTING), DeferredPipeline::fgStrHandleLightingPass, lightingSetup, lightingExec);
 }
 
 void LightingStage::fgTransparent(scene::Camera *camera) {
@@ -469,8 +469,8 @@ void LightingStage::fgTransparent(scene::Camera *camera) {
         vector<uint> dynamicOffsets = {0};
         cmdBuff->bindDescriptorSet(localSet, _descriptorSet, dynamicOffsets);
 
-        uint const globalOffsets[] = {pipeline->getPipelineUBO()->getCurrentCameraUBOOffset()};
-        cmdBuff->bindDescriptorSet(globalSet, pipeline->getDescriptorSet(), static_cast<uint>(std::size(globalOffsets)), globalOffsets);
+        const std::array<uint, 1> globalOffsets = {pipeline->getPipelineUBO()->getCurrentCameraUBOOffset()};
+        cmdBuff->bindDescriptorSet(globalSet, pipeline->getDescriptorSet(), utils::toUint(globalOffsets.size()), globalOffsets.data());
 
         // transparent
         for (auto *queue : _renderQueues) {
@@ -492,7 +492,7 @@ void LightingStage::fgTransparent(scene::Camera *camera) {
     }
 
     if (!empty) {
-        pipeline->getFrameGraph().addPass<RenderData>(static_cast<uint>(DeferredInsertPoint::IP_TRANSPARENT),
+        pipeline->getFrameGraph().addPass<RenderData>(static_cast<uint>(DeferredInsertPoint::DIP_TRANSPARENT),
                                                       DeferredPipeline::fgStrHandleTransparentPass, transparentSetup, transparentExec);
     }
 }
@@ -687,7 +687,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         auto *reflectionTex = static_cast<gfx::Texture *>(table.getRead(data.reflection));
         auto *depth = static_cast<gfx::Texture *>(table.getRead(data.depth));
         auto *pos = static_cast<gfx::Texture *>(table.getRead(data.gbufferPosition));
-        auto &elem       = _reflectionElems[_denoiseIndex];
+        auto &elem          = _reflectionElems[_denoiseIndex];
 
         // pipeline barrier
         auto *cmdBuff = pipeline->getCommandBuffers()[0];
@@ -810,7 +810,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         }
     }
 
-    uint insertPoint = static_cast<uint>(DeferredInsertPoint::IP_SSPR);
+    uint insertPoint = static_cast<uint>(DeferredInsertPoint::DIP_SSPR);
     for (uint i = 0; i < _reflectionElems.size(); ++i) {
         // add clear and comp passes here
         pipeline->getFrameGraph().addPass<DataClear>(insertPoint++, ssprClearPass[i], clearSetup, clearExec);
