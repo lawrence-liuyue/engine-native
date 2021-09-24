@@ -685,7 +685,6 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         auto *denoiseTex    = static_cast<gfx::Texture *>(table.getWrite(data.denoise));
         auto *reflectionTex = static_cast<gfx::Texture *>(table.getRead(data.reflection));
         auto *depth = static_cast<gfx::Texture *>(table.getRead(data.depth));
-        auto *pos = static_cast<gfx::Texture *>(table.getRead(data.gbufferPosition));
         auto &elem          = _reflectionElems[_denoiseIndex];
 
         // pipeline barrier
