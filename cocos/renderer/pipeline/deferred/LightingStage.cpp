@@ -45,6 +45,7 @@
 #include "scene/RenderScene.h"
 #include "scene/Sphere.h"
 #include "scene/SphereLight.h"
+#include "math/Vec4.h"
 
 namespace cc {
 namespace pipeline {
@@ -541,14 +542,14 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
 
     // step 1 prepare clear model's reflection texture pass. should switch to image clear command after available
     uint minSize   = 512;
-    _ssprTexWidth  = pipeline->getWidth();
-    _ssprTexHeight = pipeline->getHeight();
-    if (_ssprTexHeight < _ssprTexWidth) {
-        _ssprTexWidth  = minSize * _ssprTexWidth / _ssprTexHeight;
+    uint width  = pipeline->getWidth();
+    uint height = pipeline->getHeight();
+    if (height < width) {
+        _ssprTexWidth  = minSize * width / height;
         _ssprTexHeight = minSize;
     } else {
         _ssprTexWidth  = minSize;
-        _ssprTexHeight = minSize * _ssprTexHeight / _ssprTexWidth;
+        _ssprTexHeight = minSize * height / width;
     }
 
     struct DataClear {
@@ -610,10 +611,12 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         builder.writeToBlackboard(reflectTexHandle, data.reflection);
     };
 
-    auto compReflectExec = [this](DataCompReflect const &data, const framegraph::DevicePassResourceTable &table) {
+    auto compReflectExec = [this, camera](DataCompReflect const &data, const framegraph::DevicePassResourceTable &table) {
         auto *pipeline = static_cast<DeferredPipeline *>(_pipeline);
 
-        _reflectionComp->applyTexSize(_ssprTexWidth, _ssprTexHeight, _matViewProj);
+        auto          renderArea = pipeline->getRenderArea(camera, false);
+        Vec4 viewport{ (float)renderArea.x, (float)renderArea.y, (float)renderArea.width, (float)renderArea.height };
+        _reflectionComp->applyTexSize(_ssprTexWidth, _ssprTexHeight, camera->matView, camera->matViewProj, camera->matProjInv, viewport);
 
         auto *texReflection  = static_cast<gfx::Texture *>(table.getWrite(data.reflection));
         auto *texLightingOut = static_cast<gfx::Texture *>(table.getRead(data.lightingOut));
@@ -650,10 +653,9 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
 
     // step 3 prepare compute the denoise pass, contain 1 dispatch commands, compute pipeline
     struct DataCompDenoise {
-        framegraph::TextureHandle denoise;    // each reflector has its own denoise texture
-        framegraph::TextureHandle reflection; // the texture from last pass
-        framegraph::TextureHandle gbufferPosition;    // each reflector has its own denoise texture
-        framegraph::TextureHandle depth;    // each reflector has its own denoise texture
+        framegraph::TextureHandle denoise;      // each reflector has its own denoise texture
+        framegraph::TextureHandle reflection;   // the texture from last pass
+        framegraph::TextureHandle depth;        // each reflector has its own denoise texture
     };
 
     auto compDenoiseSetup = [&](framegraph::PassNodeBuilder &builder, DataCompDenoise &data) {
@@ -669,9 +671,6 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         colorTexInfo.width  = _ssprTexWidth;
         colorTexInfo.height = _ssprTexHeight;
         data.denoise        = builder.create<framegraph::Texture>(denoiseTexHandle[_denoiseIndex], colorTexInfo);
-
-        data.gbufferPosition = builder.read(framegraph::TextureHandle(builder.readFromBlackboard(DeferredPipeline::fgStrHandleGbufferTexture[1])));
-        builder.writeToBlackboard(DeferredPipeline::fgStrHandleGbufferTexture[1], data.gbufferPosition);
 
         data.depth = builder.read(framegraph::TextureHandle(builder.readFromBlackboard(DeferredPipeline::fgStrHandleDepthTexture)));
         builder.writeToBlackboard(DeferredPipeline::fgStrHandleDepthTexture, data.depth);
@@ -697,13 +696,11 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         _reflectionComp->getDenoiseDescriptorSet()->bindTexture(0, reflectionTex);
         _reflectionComp->getDenoiseDescriptorSet()->bindSampler(0, _reflectionComp->getSampler());
         _reflectionComp->getDenoiseDescriptorSet()->bindTexture(1, pipeline->getDescriptorSet()->getTexture(4));
-        assert(pipeline->getDescriptorSet()->getTexture(4) != nullptr);
         _reflectionComp->getDenoiseDescriptorSet()->bindSampler(1, _reflectionComp->getSampler());
-        _reflectionComp->getDenoiseDescriptorSet()->bindTexture(2, pos);
+        _reflectionComp->getDenoiseDescriptorSet()->bindTexture(2, depth);
         _reflectionComp->getDenoiseDescriptorSet()->bindSampler(2, _reflectionComp->getSampler());
-        _reflectionComp->getDenoiseDescriptorSet()->bindTexture(3, depth);
-        _reflectionComp->getDenoiseDescriptorSet()->bindSampler(3, _reflectionComp->getSampler());
-        _reflectionComp->getDenoiseDescriptorSet()->bindBuffer(4, _reflectionComp->getConstantsBuffer());
+        _reflectionComp->getDenoiseDescriptorSet()->bindBuffer(3, _reflectionComp->getConstantsBuffer());
+        _reflectionComp->getDenoiseDescriptorSet()->bindBuffer(4, _reflectionElems[_denoiseIndex].set->getBuffer(0));
         _reflectionComp->getDenoiseDescriptorSet()->update();
 
         elem.set->bindTexture(static_cast<uint>(ModelLocalBindings::STORAGE_REFLECTION), denoiseTex);
