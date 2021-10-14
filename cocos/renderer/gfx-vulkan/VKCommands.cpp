@@ -23,6 +23,8 @@
  THE SOFTWARE.
 ****************************************************************************/
 
+#include <boost/functional/hash.hpp>
+
 #include "VKStd.h"
 
 #include "VKCommands.h"
@@ -91,6 +93,14 @@ void cmdFuncCCVKGetDeviceQueue(CCVKDevice *device, CCVKGPUQueue *gpuQueue) {
 
     vkGetDeviceQueue(device->gpuDevice()->vkDevice, gpuQueue->possibleQueueFamilyIndices[0], 0, &gpuQueue->vkQueue);
     gpuQueue->queueFamilyIndex = gpuQueue->possibleQueueFamilyIndices[0];
+}
+
+void cmdFuncCCVKCreateQuery(CCVKDevice *device, CCVKGPUQueryPool *gpuQueryPool) {
+    VkQueryPoolCreateInfo queryPoolInfo = {};
+    queryPoolInfo.sType                 = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    queryPoolInfo.queryType             = mapVkQueryType(gpuQueryPool->type);
+    queryPoolInfo.queryCount            = gpuQueryPool->maxQueryObjects;
+    VK_CHECK(vkCreateQueryPool(device->gpuDevice()->vkDevice, &queryPoolInfo, nullptr, &gpuQueryPool->pool));
 }
 
 void cmdFuncCCVKCreateTexture(CCVKDevice *device, CCVKGPUTexture *gpuTexture) {
@@ -197,8 +207,10 @@ void cmdFuncCCVKCreateTextureView(CCVKDevice *device, CCVKGPUTextureView *gpuTex
         for (uint32_t i = 0; i < backBufferCount; ++i) {
             createFn(gpuTextureView->gpuTexture->swapchainVkImages[i], &gpuTextureView->swapchainVkImageViews[i]);
         }
-    } else {
+    } else if (gpuTextureView->gpuTexture->vkImage) {
         createFn(gpuTextureView->gpuTexture->vkImage, &gpuTextureView->vkImageView);
+    } else {
+        return;
     }
 
     device->gpuDescriptorHub()->update(gpuTextureView);
@@ -305,21 +317,16 @@ struct SubpassDependencyManager final {
     }
 
     void append(const VkSubpassDependency2 &dependency) {
-        uint32_t hash = 6U;
-        hash ^= (dependency.srcSubpass) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-        hash ^= (dependency.srcStageMask) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-        hash ^= (dependency.srcAccessMask) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-        hash ^= (dependency.dstSubpass) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-        hash ^= (dependency.dstStageMask) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-        hash ^= (dependency.dstAccessMask) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-
+        // only cares about src/dst attributes
+        size_t hash = boost::hash_range(reinterpret_cast<const uint64_t *>(&dependency.srcSubpass),
+                                        reinterpret_cast<const uint64_t *>(&dependency.dependencyFlags));
         if (_hashes.count(hash)) return;
         subpassDependencies.push_back(dependency);
         _hashes.insert(hash);
     }
 
 private:
-    unordered_set<uint32_t> _hashes;
+    unordered_set<size_t> _hashes;
 };
 
 void cmdFuncCCVKCreateRenderPass(CCVKDevice *device, CCVKGPURenderPass *gpuRenderPass) {
@@ -601,7 +608,7 @@ void cmdFuncCCVKCreateRenderPass(CCVKDevice *device, CCVKGPURenderPass *gpuRende
             statistics.storeSubpass = index;
         };
         auto calculateLifeCycle = [&](uint32_t targetAttachment, AttachmentStatistics &statistics) {
-            for (size_t j = 0U; j < subpassCount; ++j) {
+            for (uint32_t j = 0U; j < utils::toUint(subpassCount); ++j) {
                 auto &subpass = subpassDescriptions[j];
                 for (size_t k = 0U; k < subpass.colorAttachmentCount; ++k) {
                     if (subpass.pColorAttachments[k].attachment == targetAttachment) {
@@ -626,7 +633,7 @@ void cmdFuncCCVKCreateRenderPass(CCVKDevice *device, CCVKGPURenderPass *gpuRende
             }
         };
         attachmentStatistics.resize(colorAttachmentCount + hasDepth);
-        for (size_t i = 0U; i < colorAttachmentCount + hasDepth; ++i) {
+        for (uint32_t i = 0U; i < utils ::toUint(colorAttachmentCount + hasDepth); ++i) {
             attachmentStatistics[i].clear();
             calculateLifeCycle(i, attachmentStatistics[i]);
             CC_ASSERT(attachmentStatistics[i].loadSubpass != VK_SUBPASS_EXTERNAL &&
@@ -652,7 +659,7 @@ void cmdFuncCCVKCreateRenderPass(CCVKDevice *device, CCVKGPURenderPass *gpuRende
         VkSubpassDependency2 beginDependency;
         uint32_t             lastLoadSubpass{VK_SUBPASS_EXTERNAL};
         bool                 beginDependencyValid{false};
-        for (size_t i = 0U; i < colorAttachmentCount + hasDepth; ++i) {
+        for (uint32_t i = 0U; i < utils ::toUint(colorAttachmentCount + hasDepth); ++i) {
             auto &statistics = attachmentStatistics[i];
             if (lastLoadSubpass != statistics.loadSubpass) {
                 if (beginDependencyValid) dependencyManager.append(beginDependency);
@@ -684,7 +691,7 @@ void cmdFuncCCVKCreateRenderPass(CCVKDevice *device, CCVKGPURenderPass *gpuRende
         VkSubpassDependency2 endDependency;
         uint32_t             lastStoreSubpass{VK_SUBPASS_EXTERNAL};
         bool                 endDependencyValid{false};
-        for (size_t i = 0U; i < colorAttachmentCount + hasDepth; ++i) {
+        for (uint32_t i = 0U; i < utils ::toUint(colorAttachmentCount + hasDepth); ++i) {
             auto &statistics = attachmentStatistics[i];
             if (lastStoreSubpass != statistics.storeSubpass) {
                 if (endDependencyValid) dependencyManager.append(endDependency);
@@ -742,9 +749,11 @@ void cmdFuncCCVKCreateRenderPass(CCVKDevice *device, CCVKGPURenderPass *gpuRende
 }
 
 void cmdFuncCCVKCreateFramebuffer(CCVKDevice *device, CCVKGPUFramebuffer *gpuFramebuffer) {
-    size_t              colorViewCount = gpuFramebuffer->gpuColorViews.size();
-    bool                hasDepth       = gpuFramebuffer->gpuRenderPass->depthStencilAttachment.format != Format::UNKNOWN;
-    vector<VkImageView> attachments(colorViewCount + hasDepth);
+    size_t                  colorViewCount = gpuFramebuffer->gpuColorViews.size();
+    bool                    hasDepth       = gpuFramebuffer->gpuRenderPass->depthStencilAttachment.format != Format::UNKNOWN;
+    vector<VkImageView>     attachments(colorViewCount + hasDepth);
+    VkFramebufferCreateInfo createInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    createInfo.width = createInfo.height = UINT_MAX;
 
     uint32_t swapchainImageIndices = 0;
     for (size_t i = 0U; i < colorViewCount; ++i) {
@@ -755,6 +764,8 @@ void cmdFuncCCVKCreateFramebuffer(CCVKDevice *device, CCVKGPUFramebuffer *gpuFra
         } else {
             attachments[i] = gpuFramebuffer->gpuColorViews[i]->vkImageView;
         }
+        createInfo.width  = std::min(createInfo.width, gpuFramebuffer->gpuColorViews[i]->gpuTexture->width);
+        createInfo.height = std::min(createInfo.height, gpuFramebuffer->gpuColorViews[i]->gpuTexture->height);
     }
     if (hasDepth) {
         if (gpuFramebuffer->gpuDepthStencilView->gpuTexture->swapchain) {
@@ -763,17 +774,16 @@ void cmdFuncCCVKCreateFramebuffer(CCVKDevice *device, CCVKGPUFramebuffer *gpuFra
         } else {
             attachments[colorViewCount] = gpuFramebuffer->gpuDepthStencilView->vkImageView;
         }
+        createInfo.width  = std::min(createInfo.width, gpuFramebuffer->gpuDepthStencilView->gpuTexture->width);
+        createInfo.height = std::min(createInfo.height, gpuFramebuffer->gpuDepthStencilView->gpuTexture->height);
     }
     gpuFramebuffer->isOffscreen = !swapchainImageIndices;
 
     if (gpuFramebuffer->isOffscreen) {
-        CCVKGPUTextureView *    gpuTextureView = colorViewCount ? gpuFramebuffer->gpuColorViews[0] : gpuFramebuffer->gpuDepthStencilView;
-        VkFramebufferCreateInfo createInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        CCVKGPUTextureView *gpuTextureView{colorViewCount ? gpuFramebuffer->gpuColorViews[0] : gpuFramebuffer->gpuDepthStencilView};
         createInfo.renderPass      = gpuFramebuffer->gpuRenderPass->vkRenderPass;
         createInfo.attachmentCount = utils::toUint(attachments.size());
         createInfo.pAttachments    = attachments.data();
-        createInfo.width           = gpuTextureView->gpuTexture->width;
-        createInfo.height          = gpuTextureView->gpuTexture->height;
         createInfo.layers          = 1;
         VK_CHECK(vkCreateFramebuffer(device->gpuDevice()->vkDevice, &createInfo, nullptr, &gpuFramebuffer->vkFramebuffer));
     } else {
@@ -791,7 +801,6 @@ void cmdFuncCCVKCreateFramebuffer(CCVKDevice *device, CCVKGPUFramebuffer *gpuFra
         } else {
             fboListMap.emplace(std::piecewise_construct, std::forward_as_tuple(gpuFramebuffer), std::forward_as_tuple(swapchainImageCount));
         }
-        VkFramebufferCreateInfo createInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         createInfo.renderPass      = gpuFramebuffer->gpuRenderPass->vkRenderPass;
         createInfo.attachmentCount = utils::toUint(attachments.size());
         createInfo.pAttachments    = attachments.data();
@@ -799,14 +808,10 @@ void cmdFuncCCVKCreateFramebuffer(CCVKDevice *device, CCVKGPUFramebuffer *gpuFra
         for (size_t i = 0U; i < swapchainImageCount; ++i) {
             for (size_t j = 0U; j < colorViewCount; ++j) {
                 if (swapchainImageIndices & (1 << j)) {
-                    createInfo.width  = gpuFramebuffer->gpuColorViews[j]->gpuTexture->width;
-                    createInfo.height = gpuFramebuffer->gpuColorViews[j]->gpuTexture->height;
-                    attachments[j]    = gpuFramebuffer->gpuColorViews[j]->swapchainVkImageViews[i];
+                    attachments[j] = gpuFramebuffer->gpuColorViews[j]->swapchainVkImageViews[i];
                 }
             }
             if (swapchainImageIndices & (1 << colorViewCount)) {
-                createInfo.width            = gpuFramebuffer->gpuDepthStencilView->gpuTexture->width;
-                createInfo.height           = gpuFramebuffer->gpuDepthStencilView->gpuTexture->height;
                 attachments[colorViewCount] = gpuFramebuffer->gpuDepthStencilView->swapchainVkImageViews[i];
             }
             VK_CHECK(vkCreateFramebuffer(device->gpuDevice()->vkDevice, &createInfo, nullptr, &fboListMap[gpuFramebuffer][i]));
@@ -1375,6 +1380,10 @@ CC_VULKAN_API void cmdFuncCCVKCopyTextureToBuffers(CCVKDevice *device, CCVKGPUTe
     device->gpuBarrierManager()->checkIn(srcTexture);
 }
 
+void cmdFuncCCVKDestroyQuery(CCVKGPUDevice *gpuDevice, CCVKGPUQueryPool *gpuQueryPool) {
+    vkDestroyQueryPool(gpuDevice->vkDevice, gpuQueryPool->pool, nullptr);
+}
+
 void cmdFuncCCVKDestroyRenderPass(CCVKGPUDevice *gpuDevice, CCVKGPURenderPass *gpuRenderPass) {
     gpuRenderPass->beginAccesses.clear();
     gpuRenderPass->endAccesses.clear();
@@ -1487,6 +1496,13 @@ void CCVKGPURecycleBin::clear() {
                 if (res.vkImageView) {
                     vkDestroyImageView(_device->vkDevice, res.vkImageView, nullptr);
                     res.vkImageView = VK_NULL_HANDLE;
+                }
+                break;
+            case RecycledType::QUERY:
+                if (res.gpuQueryPool) {
+                    cmdFuncCCVKDestroyQuery(_device, res.gpuQueryPool);
+                    CC_DELETE(res.gpuQueryPool);
+                    res.gpuQueryPool = nullptr;
                 }
                 break;
             case RecycledType::RENDER_PASS:
@@ -1632,8 +1648,8 @@ void CCVKGPUBarrierManager::update(CCVKGPUTransportHub *transportHub) {
 
         VkPipelineStageFlags tempSrcStageMask = 0;
         VkPipelineStageFlags tempDstStageMask = 0;
-        vkImageBarriers.emplace_back(VkImageMemoryBarrier());
-        thsvsGetVulkanImageMemoryBarrier(imageBarrier, &tempSrcStageMask, &tempDstStageMask, &(*vkImageBarriers.rbegin()));
+        vkImageBarriers.emplace_back();
+        thsvsGetVulkanImageMemoryBarrier(imageBarrier, &tempSrcStageMask, &tempDstStageMask, &(vkImageBarriers.back()));
         srcStageMask |= tempSrcStageMask;
         dstStageMask |= tempDstStageMask;
 

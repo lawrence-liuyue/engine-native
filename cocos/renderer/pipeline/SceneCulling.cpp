@@ -307,6 +307,7 @@ void sceneCulling(RenderPipeline *pipeline, scene::Camera *camera) {
         }
     }
 
+    scene::AABB      ab;
     RenderObjectList renderObjects;
     RenderObjectList castShadowObject;
 
@@ -322,6 +323,17 @@ void sceneCulling(RenderPipeline *pipeline, scene::Camera *camera) {
             if (model->getCastShadow()) {
                 castShadowObject.emplace_back(genRenderObject(model, camera));
             }
+
+            const auto        visibility       = camera->visibility;
+            const auto *const node             = model->getNode();
+
+            if ((model->getNode() && ((visibility & node->getLayer()) == node->getLayer())) ||
+                (visibility & model->getVisFlags())) {
+                const auto *modelWorldBounds = model->getWorldBounds();
+                if (!modelWorldBounds && skyBox->model != model) {
+                    renderObjects.emplace_back(genRenderObject(model, camera));
+                }
+            }
         }
     }
 
@@ -329,7 +341,11 @@ void sceneCulling(RenderPipeline *pipeline, scene::Camera *camera) {
     if (isShadowMap) {
         std::vector<scene::Model *> casters;
         casters.reserve(scene->getModels().size() / 4);
-        octree->queryVisibility(camera, dirLightFrustum, true, casters);
+        if (shadowInfo->fixedArea) {
+            octree->queryVisibility(camera, camera->frustum, true, casters);
+        } else {
+            octree->queryVisibility(camera, dirLightFrustum, true, casters);
+        }
         for (const auto *model : casters) {
             dirShadowObjects.emplace_back(genRenderObject(model, camera));
         }
@@ -358,13 +374,21 @@ void sceneCulling(RenderPipeline *pipeline, scene::Camera *camera) {
                 
                 const auto *modelWorldBounds = model->getWorldBounds();
                 if (!modelWorldBounds) {
+                    renderObjects.emplace_back(genRenderObject(model, camera));
                     continue;
                 }
 
                 // dir shadow render Object
                 if (isShadowMap && model->getCastShadow()) {
-                    if (modelWorldBounds->aabbFrustum(dirLightFrustum)) {
-                        dirShadowObjects.emplace_back(genRenderObject(model, camera));
+                    if (shadowInfo->fixedArea) {
+                        model->getWorldBounds()->transform(shadowInfo->matLight, &ab);
+                        if (ab.aabbFrustum(camera->frustum)) {
+                            dirShadowObjects.emplace_back(genRenderObject(model, camera));
+                        }
+                    } else {
+                        if (modelWorldBounds->aabbFrustum(dirLightFrustum)) {
+                            dirShadowObjects.emplace_back(genRenderObject(model, camera));
+                        }
                     }
                 }
 

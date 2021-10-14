@@ -40,8 +40,8 @@ public:
     PassNodeBuilder &operator=(const PassNodeBuilder &) = delete;
     PassNodeBuilder &operator=(PassNodeBuilder &&) = delete;
 
-    template <typename ResourceType>
-    TypedHandle<ResourceType> create(const StringHandle &name, const typename ResourceType::Descriptor &desc) const noexcept;
+    template <typename DescriptorType, typename ResourceType = typename ResourceTypeLookupTable<DescriptorType>::Resource>
+    TypedHandle<ResourceType> create(const StringHandle &name, const DescriptorType &desc) const noexcept;
     template <typename ResourceType>
     TypedHandle<ResourceType> importExternal(const StringHandle &name, ResourceType &resource) const noexcept;
     template <typename ResourceType>
@@ -53,6 +53,7 @@ public:
 
     inline void sideEffect() const noexcept;
     inline void subpass(bool end = false, bool clearActionIgnorable = true) const noexcept;
+    inline void setViewport(const gfx::Rect &scissor) noexcept;
     inline void setViewport(const gfx::Viewport &viewport, const gfx::Rect &scissor) noexcept;
 
     void   writeToBlackboard(const StringHandle &name, const Handle &handle) const noexcept;
@@ -83,6 +84,11 @@ void PassNodeBuilder::sideEffect() const noexcept {
 
 void PassNodeBuilder::subpass(bool end, bool clearActionIgnorable) const noexcept {
     _passNode.subpass(end, clearActionIgnorable);
+}
+
+void PassNodeBuilder::setViewport(const gfx::Rect &scissor) noexcept {
+    gfx::Viewport viewport{scissor.x, scissor.y, scissor.width, scissor.height, 0.F, 1.F};
+    _passNode.setViewport(viewport, scissor);
 }
 
 void PassNodeBuilder::setViewport(const gfx::Viewport &viewport, const gfx::Rect &scissor) noexcept {

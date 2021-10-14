@@ -23,42 +23,45 @@
  THE SOFTWARE.
 ****************************************************************************/
 
-#include "UIPhase.h"
-#include "gfx-base/GFXCommandBuffer.h"
-#include "pipeline/PipelineStateManager.h"
-#include "scene/RenderScene.h"
-#include "scene/SubModel.h"
+#include "base/CoreStd.h"
+
+#include "CommandBufferValidator.h"
+#include "DeviceValidator.h"
+#include "QueryPoolValidator.h"
+#include "ValidationUtils.h"
 
 namespace cc {
-namespace pipeline {
+namespace gfx {
 
-void UIPhase::activate(RenderPipeline *pipeline) {
-    _pipeline = pipeline;
-    _phaseID  = getPhaseID("default");
-};
-
-void UIPhase::render(scene::Camera *camera, gfx::RenderPass *renderPass) {
-    auto *cmdBuff = _pipeline->getCommandBuffers()[0];
-
-    const auto &batches = camera->scene->getDrawBatch2Ds();
-    // Notice: The batches[0] is batchCount
-    for (auto *batch : batches) {
-        if (!(camera->visibility & batch->visFlags)) continue;
-        for (size_t i = 0; i < batch->shaders.size(); ++i) {
-            const auto *pass = batch->passes[i];
-            if (pass->getPhase() != _phaseID) continue;
-            auto *shader         = batch->shaders[i];
-            auto *inputAssembler = batch->inputAssembler;
-            auto *ds             = batch->descriptorSet;
-            auto *pso            = PipelineStateManager::getOrCreatePipelineState(pass, shader, inputAssembler, renderPass);
-            cmdBuff->bindPipelineState(pso);
-            cmdBuff->bindDescriptorSet(materialSet, pass->getDescriptorSet());
-            cmdBuff->bindDescriptorSet(localSet, ds);
-            cmdBuff->bindInputAssembler(inputAssembler);
-            cmdBuff->draw(inputAssembler);
-        }
-    }
+QueryPoolValidator::QueryPoolValidator(QueryPool *actor)
+: Agent<QueryPool>(actor) {
+    _typedID         = actor->getTypedID();
+    _type            = actor->getType();
+    _maxQueryObjects = actor->getMaxQueryObjects();
 }
 
-} // namespace pipeline
+QueryPoolValidator::~QueryPoolValidator() {
+    DeviceResourceTracker<QueryPool>::erase(this);
+    CC_SAFE_DELETE(_actor);
+}
+
+void QueryPoolValidator::doInit(const QueryPoolInfo &info) {
+    CCASSERT(!isInited(), "initializing twice?");
+    _inited = true;
+
+    /////////// execute ///////////
+
+    _actor->initialize(info);
+}
+
+void QueryPoolValidator::doDestroy() {
+    CCASSERT(isInited(), "destroying twice?");
+    _inited = false;
+
+    /////////// execute ///////////
+
+    _actor->destroy();
+}
+
+} // namespace gfx
 } // namespace cc

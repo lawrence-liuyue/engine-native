@@ -25,12 +25,39 @@
 
 #pragma once
 
+#include <functional>
 #include "GFXDef-common.h"
 
 namespace cc {
 namespace gfx {
 
-struct SwapchainTextureInfo {
+template <typename T, typename Enable = std::enable_if_t<std::is_class<T>::value>>
+struct Hasher final { size_t operator()(const T& info) const; };
+
+// make this boost::hash compatible
+template <typename T, typename Enable = std::enable_if_t<std::is_class<T>::value>>
+size_t hash_value(const T& info) { return Hasher<T>()(info); } // NOLINT(readability-identifier-naming)
+
+bool operator==(const ColorAttachment& lhs, const ColorAttachment& rhs);
+bool operator==(const DepthStencilAttachment& lhs, const DepthStencilAttachment& rhs);
+bool operator==(const SubpassInfo& lhs, const SubpassInfo& rhs);
+bool operator==(const SubpassDependency& lhs, const SubpassDependency& rhs);
+bool operator==(const RenderPassInfo& lhs, const RenderPassInfo& rhs);
+bool operator==(const FramebufferInfo& lhs, const FramebufferInfo& rhs);
+bool operator==(const Viewport& lhs, const Viewport& rhs);
+bool operator==(const Rect& lhs, const Rect& rhs);
+bool operator==(const Color& lhs, const Color& rhs);
+bool operator==(const Offset& lhs, const Offset& rhs);
+bool operator==(const Extent& lhs, const Extent& rhs);
+bool operator==(const Size& lhs, const Size& rhs);
+bool operator==(const TextureInfo& lhs, const TextureInfo& rhs);
+bool operator==(const TextureViewInfo& lhs, const TextureViewInfo& rhs);
+bool operator==(const BufferInfo& lhs, const BufferInfo& rhs);
+
+bool operator!=(const Viewport& lhs, const Viewport& rhs);
+bool operator!=(const Rect& lhs, const Rect& rhs);
+
+struct SwapchainTextureInfo final {
     Swapchain* swapchain{nullptr};
     Format     format{Format::UNKNOWN};
     uint32_t   width{0};

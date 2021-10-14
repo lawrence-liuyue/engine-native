@@ -1,5 +1,5 @@
 /****************************************************************************
- Copyright (c) 2020-2021 Huawei Technologies Co., Ltd.
+ Copyright (c) 2020-2021 Xiamen Yaji Software Co., Ltd.
 
  http://www.cocos.com
 
@@ -23,33 +23,16 @@
  THE SOFTWARE.
 ****************************************************************************/
 
-#pragma once
-
-#include "../RenderStage.h"
-#include "frame-graph/Handle.h"
+#include "EmptyQueryPool.h"
 
 namespace cc {
-namespace pipeline {
+namespace gfx {
 
-class UIPhase;
+void EmptyQueryPool::doInit(const QueryPoolInfo& info) {
+}
 
-class CC_DLL PostprocessStage : public RenderStage {
-public:
-    PostprocessStage();
-    ~PostprocessStage() override = default;
+void EmptyQueryPool::doDestroy() {
+}
 
-    static const RenderStageInfo &getInitializeInfo();
-    bool initialize(const RenderStageInfo &info) override;
-    void activate(RenderPipeline *pipeline, RenderFlow *flow) override;
-    void destroy() override;
-    void render(scene::Camera *camera) override;
-
-private:
-    gfx::Rect _renderArea;
-    UIPhase * _uiPhase = nullptr;
-    uint      _phaseID = 0;
-
-    static RenderStageInfo initInfo;
-};
-} // namespace pipeline
+} // namespace gfx
 } // namespace cc

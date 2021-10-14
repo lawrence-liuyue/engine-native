@@ -115,6 +115,8 @@ const gfx::UniformBlock UBOCamera::LAYOUT = {
         {"cc_fogColor", gfx::Type::FLOAT4, 1},
         {"cc_fogBase", gfx::Type::FLOAT4, 1},
         {"cc_fogAdd", gfx::Type::FLOAT4, 1},
+        {"cc_nearFar", gfx::Type::FLOAT4, 1},
+        {"cc_viewPort", gfx::Type::FLOAT4, 1},
     },
     1,
 };
@@ -162,6 +164,25 @@ const gfx::UniformBlock UBOLocal::LAYOUT = {
         {"cc_matWorld", gfx::Type::MAT4, 1},
         {"cc_matWorldIT", gfx::Type::MAT4, 1},
         {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1},
+    },
+    1,
+};
+
+const String                          UBOWorldBound::NAME       = "CCWorldBound";
+const gfx::DescriptorSetLayoutBinding UBOWorldBound::DESCRIPTOR = {
+    UBOWorldBound::BINDING,
+    gfx::DescriptorType::UNIFORM_BUFFER,
+    1,
+    gfx::ShaderStageFlagBit::VERTEX | gfx::ShaderStageFlagBit::COMPUTE,
+    {},
+};
+const gfx::UniformBlock UBOWorldBound::LAYOUT = {
+    localSet,
+    UBOWorldBound::BINDING,
+    UBOWorldBound::NAME,
+    {
+        {"cc_worldBoundCenter", gfx::Type::FLOAT4, 1},
+        {"cc_worldBoundHalfExtents", gfx::Type::FLOAT4, 1},
     },
     1,
 };
@@ -262,6 +283,23 @@ const gfx::UniformBlock UBOMorph::LAYOUT = {
     1,
 };
 
+const String                          UBOUILocal::NAME       = "CCMorph";
+const gfx::DescriptorSetLayoutBinding UBOUILocal::DESCRIPTOR = {
+    UBOUILocal::BINDING,
+    gfx::DescriptorType::DYNAMIC_UNIFORM_BUFFER,
+    1,
+    gfx::ShaderStageFlagBit::VERTEX,
+};
+const gfx::UniformBlock UBOUILocal::LAYOUT = {
+    localSet,
+    UBOUILocal::BINDING,
+    UBOUILocal::NAME,
+    {
+        {"cc_local_data", gfx::Type::FLOAT4, 1},
+    },
+    1,
+};
+
 const String                          SHADOWMAP::NAME       = "cc_shadowMap";
 const gfx::DescriptorSetLayoutBinding SHADOWMAP::DESCRIPTOR = {
     SHADOWMAP::BINDING,
@@ -307,6 +345,22 @@ const gfx::UniformSamplerTexture SPOTLIGHTINGMAP::LAYOUT = {
     SPOTLIGHTINGMAP::BINDING,
     SPOTLIGHTINGMAP::NAME,
     gfx::Type::SAMPLER2D,
+    1,
+};
+
+const String                          DIFFUSEMAP::NAME       = "cc_diffuseMap";
+const gfx::DescriptorSetLayoutBinding DIFFUSEMAP::DESCRIPTOR = {
+    DIFFUSEMAP::BINDING,
+    gfx::DescriptorType::SAMPLER_TEXTURE,
+    1,
+    gfx::ShaderStageFlagBit::FRAGMENT,
+    {},
+};
+const gfx::UniformSamplerTexture DIFFUSEMAP::LAYOUT = {
+    globalSet,
+    DIFFUSEMAP::BINDING,
+    DIFFUSEMAP::NAME,
+    gfx::Type::SAMPLER_CUBE,
     1,
 };
 

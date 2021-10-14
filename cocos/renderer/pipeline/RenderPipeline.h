@@ -25,11 +25,14 @@
 
 #pragma once
 
+#include <unordered_map>
 #include "Define.h"
 #include "GlobalDescriptorSetManager.h"
 #include "PipelineSceneData.h"
 #include "PipelineUBO.h"
 #include "base/CoreStd.h"
+#include "frame-graph/FrameGraph.h"
+#include "frame-graph/Handle.h"
 #include "helper/DefineMap.h"
 #include "scene/Camera.h"
 #include "scene/Model.h"
@@ -40,6 +43,9 @@ class CommandBuffer;
 class DescriptorSet;
 class DescriptorSetLayout;
 } // namespace gfx
+namespace scene {
+class SubModel;
+} // namespace scene
 namespace pipeline {
 class DefineMap;
 class GlobalDSManager;
@@ -52,7 +58,11 @@ struct CC_DLL RenderPipelineInfo {
 
 class CC_DLL RenderPipeline : public Object {
 public:
-    static RenderPipeline *getInstance();
+    static RenderPipeline *         getInstance();
+    static framegraph::StringHandle fgStrHandleOutDepthTexture;
+    static framegraph::StringHandle fgStrHandleOutColorTexture;
+    static framegraph::StringHandle fgStrHandlePostprocessPass;
+    static framegraph::StringHandle fgStrHandleBloomOutTexture;
 
     RenderPipeline();
     ~RenderPipeline() override;
@@ -75,35 +85,72 @@ public:
     inline gfx::Texture *                          getDefaultTexture() const { return _defaultTexture; }
     inline PipelineSceneData *                     getPipelineSceneData() const { return _pipelineSceneData; }
     inline const gfx::CommandBufferList &          getCommandBuffers() const { return _commandBuffers; }
+    inline const gfx::QueryPoolList &              getQueryPools() const { return _queryPools; }
     inline PipelineUBO *                           getPipelineUBO() const { return _pipelineUBO; }
-    inline const String &                          getConstantMacros() { return _constantMacros; }
-    inline gfx::Device *                           getDevice() { return _device; }
+    inline const String &                          getConstantMacros() const { return _constantMacros; }
+    inline gfx::Device *                           getDevice() const { return _device; }
     RenderStage *                                  getRenderstageByName(const String &name) const;
+    bool                                           isOccluded(const scene::Camera *camera, const scene::SubModel *subModel);
+    bool                                           getOcclusionQueryEnabled() const { return _occlusionQueryEnabled && _device->getCapabilities().supportQuery; }
+    void                                           setOcclusionQueryEnabled(bool enable) { _occlusionQueryEnabled = enable; }
+
+    gfx::Rect               getRenderArea(scene::Camera *camera);
+    gfx::Viewport           getViewport(scene::Camera *camera);
+    void                    genQuadVertexData(const Vec4 &viewport, float *data);
+    uint                    getWidth() const { return _width; }
+    uint                    getHeight() const { return _height; }
+    framegraph::FrameGraph &getFrameGraph() { return _fg; }
+    gfx::Color              getClearcolor(scene::Camera *camera) const;
+    gfx::InputAssembler *   getIAByRenderArea(const gfx::Rect &renderArea);
+    void                    updateQuadVertexData(const Vec4 &viewport, gfx::Buffer *buffer);
+    void                    ensureEnoughSize(const vector<scene::Camera *> &cameras);
+    bool                    createQuadInputAssembler(gfx::Buffer *quadIB, gfx::Buffer **quadVB, gfx::InputAssembler **quadIA);
 
     inline scene::Model *getProfiler() const { return _profiler; }
     inline void          setProfiler(scene::Model *value) { _profiler = value; }
+
+    inline bool getClusterEnabled() const { return _clusterEnabled; }
+    inline void setClusterEnabled(bool enable) { _clusterEnabled = enable; }
+
+    inline bool getBloomEnabled() const { return _bloomEnabled; }
+    inline void setBloomEnabled(bool enable) { _bloomEnabled = enable; }
 
 protected:
     static RenderPipeline *instance;
 
     void generateConstantMacros();
+    void destroyQuadInputAssembler();
 
     gfx::CommandBufferList           _commandBuffers;
+    gfx::QueryPoolList               _queryPools;
     RenderFlowList                   _flows;
     map<String, InternalBindingInst> _globalBindings;
     DefineMap                        _macros;
     uint                             _tag = 0;
     String                           _constantMacros;
 
-    gfx::Device *       _device            = nullptr;
-    GlobalDSManager *   _globalDSManager   = nullptr;
-    gfx::DescriptorSet *_descriptorSet     = nullptr;
-    PipelineUBO *       _pipelineUBO       = nullptr;
-    PipelineSceneData * _pipelineSceneData = nullptr;
-    scene::Model *      _profiler          = nullptr;
+    gfx::Device *       _device{nullptr};
+    GlobalDSManager *   _globalDSManager{nullptr};
+    gfx::DescriptorSet *_descriptorSet{nullptr};
+    PipelineUBO *       _pipelineUBO{nullptr};
+    PipelineSceneData * _pipelineSceneData{nullptr};
+    scene::Model *      _profiler{nullptr};
     // has not initBuiltinRes,
     // create temporary default Texture to binding sampler2d
-    gfx::Texture *_defaultTexture = nullptr;
+    gfx::Texture *                                    _defaultTexture{nullptr};
+    uint                                              _width{0};
+    uint                                              _height{0};
+    gfx::Buffer *                                     _quadIB{nullptr};
+    std::vector<gfx::Buffer *>                        _quadVB;
+    std::unordered_map<size_t, gfx::InputAssembler *> _quadIA;
+
+    framegraph::FrameGraph                            _fg;
+    unordered_map<gfx::ClearFlags, gfx::RenderPass *> _renderPasses;
+
+    // use cluster culling or not
+    bool _clusterEnabled{false};
+    bool _bloomEnabled{false};
+    bool _occlusionQueryEnabled{true};
 };
 
 } // namespace pipeline

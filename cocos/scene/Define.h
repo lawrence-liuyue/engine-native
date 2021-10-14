@@ -1,8 +1,8 @@
 /****************************************************************************
  Copyright (c) 2021 Xiamen Yaji Software Co., Ltd.
- 
+
  http://www.cocos.com
- 
+
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated engine source code (the "Software"), a limited,
  worldwide, royalty-free, non-assignable, revocable and non-exclusive license
@@ -10,10 +10,10 @@
  not use Cocos Creator software for developing other software or tools that's
  used for developing games. You are not granted to publish, distribute,
  sublicense, and/or sell copies of Cocos Creator.
- 
+
  The software or tools in this License Agreement are licensed, not sold.
  Xiamen Yaji Software Co., Ltd. reserves all rights not expressly granted to you.
- 
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -25,10 +25,12 @@
 
 #pragma once
 
+#include <vector>
 #include "math/Mat4.h"
 #include "math/Vec2.h"
 #include "math/Vec3.h"
 #include "math/Vec4.h"
+#include "renderer/gfx-base/GFXInputAssembler.h"
 #include "renderer/gfx-base/GFXShader.h"
 #include "scene/Model.h"
 
@@ -94,6 +96,8 @@ struct Skybox {
     bool   enabled{false};
     bool   isRGBE{false};
     bool   useIBL{false};
+    bool   useHDR{true};
+    bool   useDiffuseMap{false};
     Model *model{nullptr};
 };
 
@@ -105,17 +109,27 @@ struct Ambient {
 };
 
 struct PipelineSharedSceneData {
-    bool         isHDR{false};
-    float        shadingScale{0.0F};
-    float        fpScale{0.0F};
-    Ambient *    ambient{nullptr};
-    Shadow *     shadow{nullptr};
-    Skybox *     skybox{nullptr};
-    Fog *        fog{nullptr};
-    Pass *       deferredLightPass{nullptr};
-    gfx::Shader *deferredLightPassShader{nullptr};
-    Pass *       deferredPostPass{nullptr};
-    gfx::Shader *deferredPostPassShader{nullptr};
+    bool                 isHDR{true};
+    float                shadingScale{0.0F};
+    Ambient *            ambient{nullptr};
+    Shadow *             shadow{nullptr};
+    Skybox *             skybox{nullptr};
+    Fog *                fog{nullptr};
+    gfx::InputAssembler *occlusionQueryInputAssembler{nullptr};
+    Pass *               occlusionQueryPass{nullptr};
+    gfx::Shader *        occlusionQueryShader{nullptr};
+    Pass *               deferredLightPass{nullptr};
+    gfx::Shader *        deferredLightPassShader{nullptr};
+    Pass *               bloomPrefilterPass{nullptr};
+    gfx::Shader *        bloomPrefilterPassShader{nullptr};
+    std::vector<Pass *> bloomDownsamplePass;
+    gfx::Shader *        bloomDownsamplePassShader{nullptr};
+    std::vector<Pass *> bloomUpsamplePass;
+    gfx::Shader *        bloomUpsamplePassShader{nullptr};
+    Pass *               bloomCombinePass{nullptr};
+    gfx::Shader *        bloomCombinePassShader{nullptr};
+    Pass *               pipelinePostPass{nullptr};
+    gfx::Shader *        pipelinePostPassShader{nullptr};
 };
 
 struct FlatBuffer {

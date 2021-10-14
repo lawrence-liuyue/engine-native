@@ -34,12 +34,32 @@ namespace scene {
 
 class Pass;
 
+struct DrawCall final {
+    gfx::Buffer *         bufferView{nullptr};
+    gfx::DescriptorSet *  descriptorSet{nullptr};
+    std::vector<uint32_t> dynamicOffsets{0, 0};
+    gfx::DrawInfo *       drawInfo;
+
+    void setDynamicOffsets(uint32_t value) {
+        dynamicOffsets[1] = value;
+    }
+};
+
 struct DrawBatch2D final {
     uint32_t                   visFlags{0};
     gfx::DescriptorSet *       descriptorSet{nullptr};
     gfx::InputAssembler *      inputAssembler{nullptr};
     std::vector<Pass *>        passes;
     std::vector<gfx::Shader *> shaders;
+    std::vector<DrawCall *>    drawCalls;
+
+    void pushDrawCall(DrawCall *dc) {
+        drawCalls.push_back(dc);
+    }
+
+    void clearDrawCalls(){
+        drawCalls.clear();
+    }
 };
 
 } // namespace scene
