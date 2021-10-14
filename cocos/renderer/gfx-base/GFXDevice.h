@@ -35,6 +35,7 @@
 #include "GFXObject.h"
 #include "GFXPipelineLayout.h"
 #include "GFXPipelineState.h"
+#include "GFXQueryPool.h"
 #include "GFXQueue.h"
 #include "GFXRenderPass.h"
 #include "GFXShader.h"
@@ -68,6 +69,7 @@ public:
 
     inline CommandBuffer *      createCommandBuffer(const CommandBufferInfo &info);
     inline Queue *              createQueue(const QueueInfo &info);
+    inline QueryPool *          createQueryPool(const QueryPoolInfo &info);
     inline Swapchain *          createSwapchain(const SwapchainInfo &info);
     inline Buffer *             createBuffer(const BufferInfo &info);
     inline Buffer *             createBuffer(const BufferViewInfo &info);
@@ -88,12 +90,14 @@ public:
 
     virtual void copyBuffersToTexture(const uint8_t *const *buffers, Texture *dst, const BufferTextureCopy *regions, uint32_t count) = 0;
     virtual void copyTextureToBuffers(Texture *src, uint8_t *const *buffers, const BufferTextureCopy *region, uint32_t count)        = 0;
+    virtual void getQueryPoolResults(QueryPool *queryPool)                                                                           = 0;
 
     inline void copyBuffersToTexture(const BufferDataList &buffers, Texture *dst, const BufferTextureCopyList &regions);
     inline void flushCommands(const vector<CommandBuffer *> &cmdBuffs);
     inline void acquire(const vector<Swapchain *> &swapchains);
 
     inline Queue *           getQueue() const { return _queue; }
+    inline QueryPool *       getQueryPool() const { return _queryPool; }
     inline CommandBuffer *   getCommandBuffer() const { return _cmdBuff; }
     inline const DeviceCaps &getCapabilities() const { return _caps; }
     inline API               getGfxAPI() const { return _api; }
@@ -121,6 +125,7 @@ protected:
 
     virtual CommandBuffer *      createCommandBuffer(const CommandBufferInfo &info, bool hasAgent) = 0;
     virtual Queue *              createQueue()                                                     = 0;
+    virtual QueryPool *          createQueryPool()                                                 = 0;
     virtual Swapchain *          createSwapchain()                                                 = 0;
     virtual Buffer *             createBuffer()                                                    = 0;
     virtual Texture *            createTexture()                                                   = 0;
@@ -133,9 +138,9 @@ protected:
     virtual PipelineLayout *     createPipelineLayout()                                            = 0;
     virtual PipelineState *      createPipelineState()                                             = 0;
 
-    virtual Sampler *       createSampler(const SamplerInfo &info, uint32_t hash)               = 0;
-    virtual GlobalBarrier * createGlobalBarrier(const GlobalBarrierInfo &info, uint32_t hash)   = 0;
-    virtual TextureBarrier *createTextureBarrier(const TextureBarrierInfo &info, uint32_t hash) = 0;
+    virtual Sampler *       createSampler(const SamplerInfo &info, size_t hash)                 = 0;
+    virtual GlobalBarrier * createGlobalBarrier(const GlobalBarrierInfo &info, size_t hash)     = 0;
+    virtual TextureBarrier *createTextureBarrier(const TextureBarrierInfo &info, size_t hash)   = 0;
 
     // For context switching between threads
     virtual void bindContext(bool bound) {}
@@ -152,6 +157,7 @@ protected:
     std::array<bool, static_cast<size_t>(Feature::COUNT)> _features;
 
     Queue *        _queue{nullptr};
+    QueryPool *    _queryPool{nullptr};
     CommandBuffer *_cmdBuff{nullptr};
 
     uint32_t     _numDrawCalls{0U};
@@ -159,9 +165,9 @@ protected:
     uint32_t     _numTriangles{0U};
     MemoryStatus _memoryStatus;
 
-    unordered_map<uint32_t, Sampler *>        _samplers;
-    unordered_map<uint32_t, GlobalBarrier *>  _globalBarriers;
-    unordered_map<uint32_t, TextureBarrier *> _textureBarriers;
+    unordered_map<size_t, Sampler *>        _samplers;
+    unordered_map<size_t, GlobalBarrier *>  _globalBarriers;
+    unordered_map<size_t, TextureBarrier *> _textureBarriers;
 
 private:
     vector<Swapchain *> _swapchains;
@@ -177,6 +183,12 @@ CommandBuffer *Device::createCommandBuffer(const CommandBufferInfo &info) {
 
 Queue *Device::createQueue(const QueueInfo &info) {
     Queue *res = createQueue();
+    res->initialize(info);
+    return res;
+}
+
+QueryPool *Device::createQueryPool(const QueryPoolInfo &info) {
+    QueryPool *res = createQueryPool();
     res->initialize(info);
     return res;
 }
@@ -261,7 +273,7 @@ PipelineState *Device::createPipelineState(const PipelineStateInfo &info) {
 }
 
 Sampler *Device::getSampler(const SamplerInfo &info) {
-    uint32_t hash = gfx::Sampler::computeHash(info);
+    size_t hash = gfx::Sampler::computeHash(info);
     if (!_samplers.count(hash)) {
         _samplers[hash] = createSampler(info, hash);
     }
@@ -269,7 +281,7 @@ Sampler *Device::getSampler(const SamplerInfo &info) {
 }
 
 GlobalBarrier *Device::getGlobalBarrier(const GlobalBarrierInfo &info) {
-    uint32_t hash = gfx::GlobalBarrier::computeHash(info);
+    size_t hash = gfx::GlobalBarrier::computeHash(info);
     if (!_globalBarriers.count(hash)) {
         _globalBarriers[hash] = createGlobalBarrier(info, hash);
     }
@@ -277,7 +289,7 @@ GlobalBarrier *Device::getGlobalBarrier(const GlobalBarrierInfo &info) {
 }
 
 TextureBarrier *Device::getTextureBarrier(const TextureBarrierInfo &info) {
-    uint32_t hash = gfx::TextureBarrier::computeHash(info);
+    size_t hash = gfx::TextureBarrier::computeHash(info);
     if (!_textureBarriers.count(hash)) {
         _textureBarriers[hash] = createTextureBarrier(info, hash);
     }
