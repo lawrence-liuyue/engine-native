@@ -91,7 +91,18 @@ bool DeferredPipeline::activate(gfx::Swapchain *swapchain) {
 }
 
 void DeferredPipeline::render(const vector<scene::Camera *> &cameras) {
+    auto *device               = gfx::Device::getInstance();
+    bool  enableOcclusionQuery = getOcclusionQueryEnabled();
+    if (enableOcclusionQuery) {
+        device->getQueryPoolResults(_queryPools[0]);
+    }
+
     _commandBuffers[0]->begin();
+
+    if (enableOcclusionQuery) {
+        _commandBuffers[0]->resetQuery(_queryPools[0]);
+    }
+
     _pipelineUBO->updateGlobalUBO(cameras[0]);
     _pipelineUBO->updateMultiCameraUBO(cameras);
     ensureEnoughSize(cameras);
@@ -115,9 +126,15 @@ void DeferredPipeline::render(const vector<scene::Camera *> &cameras) {
         _pipelineUBO->incCameraUBOOffset();
     }
 
+    if (enableOcclusionQuery) {
+        _commandBuffers[0]->completeQuery(_queryPools[0]);
+    }
+
     _commandBuffers[0]->end();
     _device->flushCommands(_commandBuffers);
     _device->getQueue()->submit(_commandBuffers);
+
+    RenderPipeline::framegraphGC();
 }
 
 bool DeferredPipeline::activeRenderer(gfx::Swapchain *swapchain) {
@@ -125,14 +142,7 @@ bool DeferredPipeline::activeRenderer(gfx::Swapchain *swapchain) {
     _queryPools.push_back(_device->getQueryPool());
     auto *const sharedData = _pipelineSceneData->getSharedData();
 
-    gfx::Sampler *const sampler = _device->getSampler({
-        gfx::Filter::POINT,
-        gfx::Filter::POINT,
-        gfx::Filter::NONE,
-        gfx::Address::CLAMP,
-        gfx::Address::CLAMP,
-        gfx::Address::CLAMP,
-    });
+    gfx::Sampler *const sampler = getGlobalDSManager()->getPointSampler();
 
     // Main light sampler binding
     _descriptorSet->bindSampler(SHADOWMAP::BINDING, sampler);

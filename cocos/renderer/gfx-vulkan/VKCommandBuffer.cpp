@@ -160,7 +160,13 @@ void CCVKCommandBuffer::beginRenderPass(RenderPass *renderPass, Framebuffer *fbo
     passBeginInfo.framebuffer     = framebuffer;
     passBeginInfo.clearValueCount = utils::toUint(clearValues.size());
     passBeginInfo.pClearValues    = clearValues.data();
-    passBeginInfo.renderArea      = {{renderArea.x, renderArea.y}, {renderArea.width, renderArea.height}};
+
+    // don't quote me on this but:
+    // metal doesn't really have the concept of render area (to limit the range of load ops)
+    // and it doesn't matter most of the time since we have framegraph doing the optimizations
+    // (multiple split-screen passes will be merge into one render pass)
+    // so to keep the behavior consistent we just use the FBO extent here as the render area
+    passBeginInfo.renderArea.extent = {_curGPUFBO->width, _curGPUFBO->height};
 
     vkCmdBeginRenderPass(_gpuCommandBuffer->vkCommandBuffer, &passBeginInfo,
                          secondaryCBCount ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS : VK_SUBPASS_CONTENTS_INLINE);
@@ -168,11 +174,12 @@ void CCVKCommandBuffer::beginRenderPass(RenderPass *renderPass, Framebuffer *fbo
     _secondaryRP = secondaryCBCount;
 
     if (!secondaryCBCount) {
-        VkViewport viewport{static_cast<float>(renderArea.x), static_cast<float>(renderArea.y), static_cast<float>(renderArea.width), static_cast<float>(renderArea.height), 0.F, 1.F};
+        VkViewport viewport{static_cast<float>(renderArea.x), static_cast<float>(renderArea.y),
+                            static_cast<float>(renderArea.width), static_cast<float>(renderArea.height), 0.F, 1.F};
         vkCmdSetViewport(_gpuCommandBuffer->vkCommandBuffer, 0, 1, &viewport);
-        vkCmdSetScissor(_gpuCommandBuffer->vkCommandBuffer, 0, 1, &passBeginInfo.renderArea);
         _curDynamicStates.viewport = {renderArea.x, renderArea.y, renderArea.width, renderArea.height};
-        _curDynamicStates.scissor  = renderArea;
+        vkCmdSetScissor(_gpuCommandBuffer->vkCommandBuffer, 0, 1, &passBeginInfo.renderArea);
+        _curDynamicStates.scissor = {0, 0, renderArea.width, renderArea.height};
     }
 }
 
@@ -245,7 +252,8 @@ void CCVKCommandBuffer::bindInputAssembler(InputAssembler *ia) {
                                gpuInputAssembler->vertexBuffers.data(), gpuInputAssembler->vertexBufferOffsets.data());
 
         if (gpuInputAssembler->gpuIndexBuffer) {
-            vkCmdBindIndexBuffer(_gpuCommandBuffer->vkCommandBuffer, gpuInputAssembler->gpuIndexBuffer->gpuBuffer->vkBuffer, 0,
+            vkCmdBindIndexBuffer(_gpuCommandBuffer->vkCommandBuffer, gpuInputAssembler->gpuIndexBuffer->gpuBuffer->vkBuffer,
+                                 gpuInputAssembler->gpuIndexBuffer->gpuBuffer->getStartOffset(gpuDevice->curBackBufferIndex),
                                  gpuInputAssembler->gpuIndexBuffer->gpuBuffer->stride == 4 ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16);
         }
         _curGPUInputAssember = gpuInputAssembler;

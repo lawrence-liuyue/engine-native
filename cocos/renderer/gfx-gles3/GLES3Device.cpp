@@ -73,6 +73,7 @@ GLES3Device::~GLES3Device() {
 bool GLES3Device::doInit(const DeviceInfo & /*info*/) {
     _gpuContext             = CC_NEW(GLES3GPUContext);
     _gpuStateCache          = CC_NEW(GLES3GPUStateCache);
+    _gpuSamplerRegistry     = CC_NEW(GLES3GPUSamplerRegistry);
     _gpuConstantRegistry    = CC_NEW(GLES3GPUConstantRegistry);
     _gpuFramebufferCacheMap = CC_NEW(GLES3GPUFramebufferCacheMap(_gpuStateCache));
 
@@ -213,7 +214,7 @@ bool GLES3Device::doInit(const DeviceInfo & /*info*/) {
     _queue         = createQueue(queueInfo);
 
     QueryPoolInfo queryPoolInfo{QueryType::OCCLUSION, DEFAULT_MAX_QUERY_OBJECTS};
-    _queryPool = GLES3Device::getInstance()->createQueryPool(queryPoolInfo);
+    _queryPool = createQueryPool(queryPoolInfo);
 
     CommandBufferInfo cmdBuffInfo;
     cmdBuffInfo.type  = CommandBufferType::PRIMARY;
@@ -235,6 +236,7 @@ bool GLES3Device::doInit(const DeviceInfo & /*info*/) {
 void GLES3Device::doDestroy() {
     CC_SAFE_DELETE(_gpuFramebufferCacheMap)
     CC_SAFE_DELETE(_gpuConstantRegistry)
+    CC_SAFE_DELETE(_gpuSamplerRegistry)
     CC_SAFE_DELETE(_gpuStateCache)
 
     CCASSERT(!_memoryStatus.bufferSize, "Buffer memory leaked");
@@ -330,16 +332,12 @@ PipelineState *GLES3Device::createPipelineState() {
     return CC_NEW(GLES3PipelineState);
 }
 
-Sampler *GLES3Device::createSampler(const SamplerInfo &info, size_t hash) {
-    return CC_NEW(GLES3Sampler(info, hash));
+Sampler *GLES3Device::createSampler(const SamplerInfo &info) {
+    return CC_NEW(GLES3Sampler(info));
 }
 
-GlobalBarrier *GLES3Device::createGlobalBarrier(const GlobalBarrierInfo &info, size_t hash) {
-    return CC_NEW(GLES3GlobalBarrier(info, hash));
-}
-
-TextureBarrier *GLES3Device::createTextureBarrier(const TextureBarrierInfo &info, size_t hash) {
-    return CC_NEW(TextureBarrier(info, hash));
+GlobalBarrier *GLES3Device::createGlobalBarrier(const GlobalBarrierInfo &info) {
+    return CC_NEW(GLES3GlobalBarrier(info));
 }
 
 void GLES3Device::copyBuffersToTexture(const uint8_t *const *buffers, Texture *dst, const BufferTextureCopy *regions, uint32_t count) {

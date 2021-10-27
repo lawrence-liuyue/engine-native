@@ -109,9 +109,15 @@ void ForwardPipeline::render(const vector<scene::Camera *> &cameras) {
         _pipelineUBO->incCameraUBOOffset();
     }
 
+    if (enableOcclusionQuery) {
+        _commandBuffers[0]->completeQuery(_queryPools[0]);
+    }
+
     _commandBuffers[0]->end();
     _device->flushCommands(_commandBuffers);
     _device->getQueue()->submit(_commandBuffers);
+
+    RenderPipeline::framegraphGC();
 }
 
 bool ForwardPipeline::activeRenderer(gfx::Swapchain *swapchain) {
@@ -119,14 +125,7 @@ bool ForwardPipeline::activeRenderer(gfx::Swapchain *swapchain) {
     _queryPools.push_back(_device->getQueryPool());
     auto *const sharedData = _pipelineSceneData->getSharedData();
 
-    gfx::Sampler *const shadowMapSampler = _device->getSampler({
-        gfx::Filter::POINT,
-        gfx::Filter::POINT,
-        gfx::Filter::NONE,
-        gfx::Address::CLAMP,
-        gfx::Address::CLAMP,
-        gfx::Address::CLAMP,
-    });
+    gfx::Sampler *const shadowMapSampler = getGlobalDSManager()->getPointSampler();
 
     // Main light sampler binding
     _descriptorSet->bindSampler(SHADOWMAP::BINDING, shadowMapSampler);

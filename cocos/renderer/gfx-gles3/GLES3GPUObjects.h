@@ -90,13 +90,6 @@ private:
     StringArray _extensions;
 };
 
-class GLES3GPUSwapchain final : public Object {
-public:
-    EGLSurface eglSurface{EGL_NO_SURFACE};
-    EGLint     eglSwapInterval{0};
-    GLuint     glFramebuffer{0};
-};
-
 class GLES3GPUQueryPool final : public Object {
 public:
     QueryType           type{QueryType::OCCLUSION};
@@ -108,7 +101,7 @@ public:
             return glQueryIds[queryId];
         }
 
-        return -1;
+        return ~0U;
     }
 };
 
@@ -159,6 +152,14 @@ public:
 
 using GLES3GPUTextureList = vector<GLES3GPUTexture *>;
 
+class GLES3GPUSwapchain final : public Object {
+public:
+    EGLSurface       eglSurface{EGL_NO_SURFACE};
+    EGLint           eglSwapInterval{0};
+    GLuint           glFramebuffer{0};
+    GLES3GPUTexture *gpuColorTexture{nullptr};
+};
+
 class GLES3GPUSampler final : public Object {
 public:
     Filter  minFilter   = Filter::NONE;
@@ -167,7 +168,6 @@ public:
     Address addressU    = Address::CLAMP;
     Address addressV    = Address::CLAMP;
     Address addressW    = Address::CLAMP;
-    GLuint  glSampler   = 0;
     GLenum  glMinFilter = 0;
     GLenum  glMagFilter = 0;
     GLenum  glWrapS     = 0;
@@ -328,17 +328,30 @@ public:
     GLES3GPUTexture *   gpuDepthStencilTexture{nullptr};
     bool                usesFBF{false};
 
+    struct GLFramebufferInfo {
+        GLuint   glFramebuffer{0U};
+        uint32_t width{UINT_MAX};
+        uint32_t height{UINT_MAX};
+    };
     struct GLFramebuffer {
-        inline void   initialize(GLES3GPUSwapchain *sc) { swapchain = sc; }
-        inline void   initialize(GLuint framebuffer) { _glFramebuffer = framebuffer; }
-        inline GLuint getFramebuffer() const { return swapchain ? swapchain->glFramebuffer : _glFramebuffer; }
+        inline void initialize(GLES3GPUSwapchain *sc) { swapchain = sc; }
+        inline void initialize(const GLFramebufferInfo &info) {
+            _glFramebuffer = info.glFramebuffer;
+            _width         = info.width;
+            _height        = info.height;
+        }
+        inline GLuint   getFramebuffer() const { return swapchain ? swapchain->glFramebuffer : _glFramebuffer; }
+        inline uint32_t getWidth() const { return swapchain ? swapchain->gpuColorTexture->width : _width; }
+        inline uint32_t getHeight() const { return swapchain ? swapchain->gpuColorTexture->height : _height; }
 
         void destroy(GLES3GPUStateCache *cache, GLES3GPUFramebufferCacheMap *framebufferCacheMap);
 
         GLES3GPUSwapchain *swapchain{nullptr};
 
     private:
-        GLuint _glFramebuffer{0U};
+        GLuint   _glFramebuffer{0U};
+        uint32_t _width{0U};
+        uint32_t _height{0U};
     };
 
     struct Framebuffer {
@@ -525,11 +538,25 @@ private:
     bool _initialized{false};
 };
 
+class GLES3GPUSamplerRegistry final : public Object {
+public:
+    ~GLES3GPUSamplerRegistry() {
+        vector<GLuint> glSampelrs;
+        for (const auto &pair : _cache) {
+            glSampelrs.push_back(pair.second);
+        }
+        GL_CHECK(glDeleteSamplers(static_cast<GLsizei>(glSampelrs.size()), glSampelrs.data()));
+    }
+
+    GLuint getGLSampler(GLES3GPUSampler *gpuSampler);
+
+private:
+    unordered_map<GLES3GPUSampler *, GLuint> _cache;
+};
+
 class GLES3GPUFramebufferCacheMap final : public Object {
 public:
     explicit GLES3GPUFramebufferCacheMap(GLES3GPUStateCache *cache) : _cache(cache) {}
-
-    ~GLES3GPUFramebufferCacheMap() override = default;
 
     void registerExternal(GLuint glFramebuffer, const GLES3GPUTexture *gpuTexture, uint32_t mipLevel) {
         bool   isTexture  = gpuTexture->glTexture;

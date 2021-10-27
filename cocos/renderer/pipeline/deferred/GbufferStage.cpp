@@ -71,7 +71,7 @@ void GbufferStage::activate(RenderPipeline *pipeline, RenderFlow *flow) {
         uint                  phase    = convertPhase(descriptor.stages);
         RenderQueueSortFunc   sortFunc = convertQueueSortFunc(descriptor.sortMode);
         RenderQueueCreateInfo info     = {descriptor.isTransparent, phase, sortFunc};
-        _renderQueues.emplace_back(CC_NEW(RenderQueue(_pipeline, std::move(info))));
+        _renderQueues.emplace_back(CC_NEW(RenderQueue(_pipeline, std::move(info), true)));
     }
     _planarShadowQueue = CC_NEW(PlanarShadowQueue(_pipeline));
 }
@@ -148,7 +148,7 @@ void GbufferStage::render(scene::Camera *camera) {
 
     auto  *pipeline = static_cast<DeferredPipeline *>(_pipeline);
     float  shadingScale{_pipeline->getPipelineSceneData()->getSharedData()->shadingScale};
-    _renderArea     = pipeline->getRenderArea(camera);
+    _renderArea = RenderPipeline::getRenderArea(camera);
 
     // render area is not oriented, copy buffer must be called outsize of RenderPass, it should not be called in execute lambda expression
     // If there are only transparent object, lighting pass is ignored, we should call getIAByRenderArea here
@@ -221,7 +221,7 @@ void GbufferStage::render(scene::Camera *camera) {
         builder.writeToBlackboard(DeferredPipeline::fgStrHandleOutDepthTexture, data.depth);
 
         // viewport setup
-        builder.setViewport(pipeline->getViewport(camera), _renderArea);
+        builder.setViewport(pipeline->getViewport(camera), pipeline->getScissor(camera));
     };
 
     auto gbufferExec = [this, camera](const RenderData & /*data*/, const framegraph::DevicePassResourceTable &table) {
