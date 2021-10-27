@@ -27,7 +27,8 @@ public:
     void initReflectionRes();
     void initDenoiseRes();
     void applyTexSize(uint width, uint height, const Mat4 &matView,
-                      const Mat4& matViewProj, const Mat4& matProjInv, const Vec4 &viewPort);
+                      const Mat4& matViewProj, const Mat4& matViewProjInv,
+                      const Vec4 &viewPort);
 
     inline gfx::DescriptorSet*            getDescriptorSet() { return _compDescriptorSet; }
     inline const gfx::PipelineState*      getPipelineState() { return _compPipelineState; }

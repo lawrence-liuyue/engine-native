@@ -26,14 +26,14 @@ namespace {
 struct ConstantBuffer {
     Mat4 matView;
     Mat4 matViewProj;   // view projection矩阵
-    Mat4 matProjInv;    // projection逆矩阵
+    Mat4 matViewProjInv;    // projection逆矩阵
     Vec4 viewPort;      // lighting viewport
     Vec2 texSize;       // 反射纹理大小
 };
 } // namespace
 
 void ReflectionComp::applyTexSize(uint width, uint height, const Mat4 &matView,
-                                  const Mat4& matViewProj, const Mat4& matProjInv,
+                                  const Mat4& matViewProj, const Mat4& matViewProjInv,
                                   const Vec4 &viewPort) {
     uint globalWidth  = width;
     uint globalHeight = height;
@@ -46,7 +46,7 @@ void ReflectionComp::applyTexSize(uint width, uint height, const Mat4 &matView,
     ConstantBuffer constants;
     constants.matView       = matView;
     constants.matViewProj   = matViewProj;
-    constants.matProjInv    = matProjInv;
+    constants.matViewProjInv    = matViewProjInv;
     constants.viewPort      = viewPort;
     constants.texSize       = {float(width), float(height)};
     constants.viewPort      = viewPort;
@@ -130,14 +130,14 @@ void ReflectionComp::initReflectionRes() {
         {
             mat4 matView;
             mat4 matViewProj;
-            mat4 matProjInv;
+            mat4 matViewProjInv;
             vec4 viewPort;
             vec2 texSize;
         };
-        layout(set = 0, binding = 1) uniform sampler2D lightingTex;
-        layout(set = 0, binding = 2) uniform sampler2D worldPositionTex;
-        layout(set = 0, binding = 3, rgba8) writeonly uniform lowp image2D reflectionTex;
 
+        layout(set = 0, binding = 1) uniform sampler2D lightingTex;
+        layout(set = 0, binding = 2) uniform sampler2D depth;
+        layout(set = 0, binding = 3, rgba8) writeonly uniform lowp image2D reflectionTex;
         layout(set = 0, binding = 4, std140) uniform CCLocal
         {
             mat4 cc_matWorld;
@@ -145,18 +145,36 @@ void ReflectionComp::initReflectionRes() {
             vec4 cc_lightingMapUVParam;
         };
 
+        vec4 screen2WS(vec3 coord) {
+            vec4 ndc = vec4(
+                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                coord.z,
+                1.0
+            );
+
+            vec4 world = matViewProjInv * ndc;
+            world = world / world.w;
+            return world;
+        }
+
         void main() {
             float _HorizontalPlaneHeightWS = 0.01;
             _HorizontalPlaneHeightWS = (cc_matWorld * vec4(0,0,0,1)).y;
             vec2 uv = vec2(gl_GlobalInvocationID.xy) / texSize;
-            vec3 posWS = texture(worldPositionTex, uv).xyz;
+            vec4 depValue = texture(depth, uv);
+            if (depValue.r == 1.0) {
+                return;
+            }
+
+            vec2 screenPos = uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y);
+            vec3 posWS = screen2WS(vec3(screenPos, depValue.r)).xyz;
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
 
             vec3 reflectedPosWS = posWS;
             reflectedPosWS.y = reflectedPosWS.y - _HorizontalPlaneHeightWS;
             reflectedPosWS.y = reflectedPosWS.y * -1.0;
             reflectedPosWS.y = reflectedPosWS.y + _HorizontalPlaneHeightWS;
-
 
             vec4 reflectedPosCS = matViewProj * vec4(reflectedPosWS, 1);
             vec2 reflectedPosNDCxy = reflectedPosCS.xy / reflectedPosCS.w;//posCS -> posNDC
@@ -177,12 +195,12 @@ void ReflectionComp::initReflectionRes() {
         {
             mat4 matView;
             mat4 matViewProj;
-            mat4 matProjInv;
+            mat4 matViewProjInv;
             vec4 viewPort;
             vec2 texSize;
         };
         uniform sampler2D lightingTex;
-        uniform sampler2D worldPositionTex;
+        uniform sampler2D depth;
         layout(rgba8) writeonly uniform lowp image2D reflectionTex;
 
         layout(std140) uniform CCLocal
@@ -192,11 +210,30 @@ void ReflectionComp::initReflectionRes() {
             vec4 cc_lightingMapUVParam;
         };
 
+        vec4 screen2WS(vec3 coord) {
+            vec4 ndc = vec4(
+                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                2.0 * coord.z - 1.0,
+                1.0
+            );
+
+            vec4 world = matViewProjInv * ndc;
+            world = world / world.w;
+            return world;
+        }
+
         void main() {
             float _HorizontalPlaneHeightWS = 0.01;
             _HorizontalPlaneHeightWS = (cc_matWorld * vec4(0,0,0,1)).y;
             vec2 uv = vec2(gl_GlobalInvocationID.xy) / texSize;
-            vec3 posWS = texture(worldPositionTex, uv).xyz;
+            vec4 depValue = texture(depth, uv);
+            if (depValue.r == 1.0) {
+                return;
+            }
+
+            vec2 screenPos = uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y);
+            vec3 posWS = screen2WS(vec3(screenPos, depValue.r)).xyz;
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
 
             vec3 reflectedPosWS = posWS;
@@ -224,14 +261,14 @@ void ReflectionComp::initReflectionRes() {
         {0, 0, "Constants", {
             {"matView", gfx::Type::MAT4, 1},
             {"matViewProj", gfx::Type::MAT4, 1},
-            {"matProjInv", gfx::Type::MAT4, 1},
+            {"matViewProjInv", gfx::Type::MAT4, 1},
             {"viewPort", gfx::Type::FLOAT4, 1},
             {"texSize", gfx::Type::FLOAT2, 1},
             }, 1},
         {0, 4, "CCLocal", {{"cc_matWorld", gfx::Type::MAT4, 1}, {"cc_matWorldIT", gfx::Type::MAT4, 1}, {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1}}, 1}};
     shaderInfo.samplerTextures = {
         {0, 1, "lightingTex", gfx::Type::SAMPLER2D, 1},
-        {0, 2, "worldPositionTex", gfx::Type::SAMPLER2D, 1}};
+        {0, 2, "depth", gfx::Type::SAMPLER2D, 1}};
     shaderInfo.images = {
         {0, 3, "reflectionTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
     _compShader = _device->createShader(shaderInfo);
@@ -239,14 +276,14 @@ void ReflectionComp::initReflectionRes() {
     gfx::DescriptorSetLayoutInfo dslInfo;
     dslInfo.bindings.push_back({0, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
     dslInfo.bindings.push_back({1, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({2, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({2, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE });
     dslInfo.bindings.push_back({3, gfx::DescriptorType::STORAGE_IMAGE, 1, gfx::ShaderStageFlagBit::COMPUTE});
     dslInfo.bindings.push_back({4, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
 
     _compDescriptorSetLayout = _device->createDescriptorSetLayout(dslInfo);
     _compDescriptorSet       = _device->createDescriptorSet({_compDescriptorSetLayout});
 
-    _compPipelineLayout = _device->createPipelineLayout({{_compDescriptorSetLayout, _localDescriptorSetLayout}});
+    _compPipelineLayout = _device->createPipelineLayout({{_compDescriptorSetLayout}});
 
     gfx::PipelineStateInfo pipelineInfo;
     pipelineInfo.shader         = _compShader;
@@ -268,7 +305,7 @@ void ReflectionComp::initDenoiseRes() {
         {
             mat4 matView;
             mat4 matViewProj;
-            mat4 matProjInv;
+            mat4 matViewProjInv;
             vec4 viewPort;
             vec2 texSize;
         };
@@ -290,7 +327,7 @@ void ReflectionComp::initDenoiseRes() {
                 1.0
             );
 
-            vec4 eye = matProjInv * ndc;
+            vec4 eye = matViewProjInv * ndc;
             eye = eye / eye.w;
             return eye;
         }
@@ -365,7 +402,7 @@ void ReflectionComp::initDenoiseRes() {
         {
             mat4 matView;
             mat4 matViewProj;
-            mat4 matProjInv;
+            mat4 matViewProjInv;
             vec4 viewPort;
             vec2 texSize;
         };
@@ -387,7 +424,7 @@ void ReflectionComp::initDenoiseRes() {
                 1.0
             );
 
-            vec4 eye = matProjInv * ndc;
+            vec4 eye = matViewProjInv * ndc;
             eye = eye / eye.w;
             return eye;
         }
@@ -460,7 +497,7 @@ void ReflectionComp::initDenoiseRes() {
         {0, 3, "Constants", {
             {"matView", gfx::Type::MAT4, 1},
             {"matViewProj", gfx::Type::MAT4, 1},
-            {"matProjInv", gfx::Type::MAT4, 1},
+            {"matViewProjInv", gfx::Type::MAT4, 1},
             {"viewPort", gfx::Type::FLOAT4, 1},
             {"texSize", gfx::Type::FLOAT2, 1},
             }, 1},
