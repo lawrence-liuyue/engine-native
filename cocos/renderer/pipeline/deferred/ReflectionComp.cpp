@@ -12,9 +12,11 @@ ReflectionComp::~ReflectionComp() {
     CC_SAFE_DESTROY(_compDescriptorSet);
 
     CC_SAFE_DESTROY(_compDenoiseShader);
+    CC_SAFE_DESTROY(_compDenoiseShaderEnvmap);
     CC_SAFE_DESTROY(_compDenoiseDescriptorSetLayout);
     CC_SAFE_DESTROY(_compDenoisePipelineLayout);
     CC_SAFE_DESTROY(_compDenoisePipelineState);
+    CC_SAFE_DESTROY(_compDenoisePipelineStateEnvmap);
     CC_SAFE_DESTROY(_compDenoiseDescriptorSet);
 
     CC_SAFE_DESTROY(_localDescriptorSetLayout);
@@ -114,6 +116,7 @@ void ReflectionComp::init(gfx::Device *dev, uint groupSizeX, uint groupSizeY) {
 
     initReflectionRes();
     initDenoiseRes();
+    //initDenoiseResEnvmap();
 }
 
 void ReflectionComp::initReflectionRes() {
@@ -299,6 +302,86 @@ void ReflectionComp::initDenoiseRes() {
         R"(
         layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
         layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
+        layout(set = 1, binding = 12, rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        void main() {
+            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
+            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
+            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
+            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+
+            vec4 best = center;
+            best = right.a > best.a + 0.1 ? right : best;
+            best = bottom.a > best.a + 0.1 ? bottom : best;
+            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+
+            imageStore(denoiseTex, id + ivec2(0, 0), best.a > center.a + 0.1 ? best : center);
+            imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
+            imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
+            imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
+        })",
+        _groupSizeX, _groupSizeY, pipeline::REFLECTIONSTORAGE::BINDING);
+    sources.glsl3 = StringUtil::format(
+        R"(
+        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
+        uniform sampler2D reflectionTex;
+        layout(rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        void main() {
+            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
+            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
+            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
+            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+
+            vec4 best = center;
+            best = right.a > best.a + 0.1 ? right : best;
+            best = bottom.a > best.a + 0.1 ? bottom : best;
+            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+
+            imageStore(denoiseTex, id + ivec2(0, 0), best.a > center.a + 0.1 ? best : center);
+            imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
+            imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
+            imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
+        })",
+        _groupSizeX, _groupSizeY);
+    // no compute support in GLES2
+
+    gfx::ShaderInfo shaderInfo;
+    shaderInfo.name            = "Compute ";
+    shaderInfo.stages          = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
+    shaderInfo.blocks          = {};
+    shaderInfo.samplerTextures = {
+        {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1}};
+    shaderInfo.images = {
+        {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
+    _compDenoiseShader = _device->createShader(shaderInfo);
+
+    gfx::DescriptorSetLayoutInfo dslInfo;
+    dslInfo.bindings.push_back({0, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({1, gfx::DescriptorType::STORAGE_IMAGE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    _compDenoiseDescriptorSetLayout = _device->createDescriptorSetLayout(dslInfo);
+    _compDenoisePipelineLayout      = _device->createPipelineLayout({{_compDenoiseDescriptorSetLayout, _localDescriptorSetLayout}});
+
+    _compDenoiseDescriptorSet = _device->createDescriptorSet({_compDenoiseDescriptorSetLayout});
+
+    gfx::PipelineStateInfo pipelineInfo;
+    pipelineInfo.shader         = _compDenoiseShader;
+    pipelineInfo.pipelineLayout = _compDenoisePipelineLayout;
+    pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
+
+    _compDenoisePipelineState = _device->createPipelineState(pipelineInfo);
+}
+
+void ReflectionComp::initDenoiseResEnvmap() {
+    ShaderSources<ComputeShaderSource> sources;
+    sources.glsl4 = StringUtil::format(
+        R"(
+        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
+        layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
         layout(set = 0, binding = 1) uniform samplerCube envMap;
         layout(set = 0, binding = 2) uniform sampler2D depth;
         layout(set = 0, binding = 3) uniform Constants
@@ -323,7 +406,7 @@ void ReflectionComp::initDenoiseRes() {
             vec4 ndc = vec4(
                 2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
                 2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
-                (coord.z + 1.0) / 2.0,
+                coord.z,
                 1.0
             );
 
@@ -510,25 +593,14 @@ void ReflectionComp::initDenoiseRes() {
         };
     shaderInfo.images = {
         {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
-    _compDenoiseShader = _device->createShader(shaderInfo);
-
-    gfx::DescriptorSetLayoutInfo dslInfo;
-    dslInfo.bindings.push_back({0, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({1, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({2, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({3, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({4, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    _compDenoiseDescriptorSetLayout = _device->createDescriptorSetLayout(dslInfo);
-    _compDenoisePipelineLayout      = _device->createPipelineLayout({{_compDenoiseDescriptorSetLayout, _localDescriptorSetLayout}});
-
-    _compDenoiseDescriptorSet = _device->createDescriptorSet({_compDenoiseDescriptorSetLayout});
+    _compDenoiseShaderEnvmap = _device->createShader(shaderInfo);
 
     gfx::PipelineStateInfo pipelineInfo;
-    pipelineInfo.shader         = _compDenoiseShader;
+    pipelineInfo.shader         = _compDenoiseShaderEnvmap;
     pipelineInfo.pipelineLayout = _compDenoisePipelineLayout;
     pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
 
-    _compDenoisePipelineState = _device->createPipelineState(pipelineInfo);
+    _compDenoisePipelineStateEnvmap = _device->createPipelineState(pipelineInfo);
 }
 
 template <typename T>
