@@ -63,6 +63,7 @@ public:
     static framegraph::StringHandle fgStrHandleOutColorTexture;
     static framegraph::StringHandle fgStrHandlePostprocessPass;
     static framegraph::StringHandle fgStrHandleBloomOutTexture;
+    static gfx::Rect                getRenderArea(scene::Camera *camera);
 
     RenderPipeline();
     ~RenderPipeline() override;
@@ -94,8 +95,8 @@ public:
     bool                                           getOcclusionQueryEnabled() const { return _occlusionQueryEnabled && _device->getCapabilities().supportQuery; }
     void                                           setOcclusionQueryEnabled(bool enable) { _occlusionQueryEnabled = enable; }
 
-    gfx::Rect               getRenderArea(scene::Camera *camera);
     gfx::Viewport           getViewport(scene::Camera *camera);
+    gfx::Rect               getScissor(scene::Camera *camera);
     void                    genQuadVertexData(const Vec4 &viewport, float *data);
     uint                    getWidth() const { return _width; }
     uint                    getHeight() const { return _height; }
@@ -121,6 +122,8 @@ protected:
     void generateConstantMacros();
     void destroyQuadInputAssembler();
 
+    static void framegraphGC();
+
     gfx::CommandBufferList           _commandBuffers;
     gfx::QueryPoolList               _queryPools;
     RenderFlowList                   _flows;
@@ -137,12 +140,12 @@ protected:
     scene::Model *      _profiler{nullptr};
     // has not initBuiltinRes,
     // create temporary default Texture to binding sampler2d
-    gfx::Texture *                                    _defaultTexture{nullptr};
-    uint                                              _width{0};
-    uint                                              _height{0};
-    gfx::Buffer *                                     _quadIB{nullptr};
-    std::vector<gfx::Buffer *>                        _quadVB;
-    std::unordered_map<size_t, gfx::InputAssembler *> _quadIA;
+    gfx::Texture *                                                _defaultTexture{nullptr};
+    uint                                                          _width{0};
+    uint                                                          _height{0};
+    gfx::Buffer *                                                 _quadIB{nullptr};
+    std::vector<gfx::Buffer *>                                    _quadVB;
+    std::unordered_map<Vec4, gfx::InputAssembler *, Hasher<Vec4>> _quadIA;
 
     framegraph::FrameGraph                            _fg;
     unordered_map<gfx::ClearFlags, gfx::RenderPass *> _renderPasses;

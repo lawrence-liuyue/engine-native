@@ -29,6 +29,7 @@
 #include "PipelineStateManager.h"
 #include "RenderFlow.h"
 #include "RenderPipeline.h"
+#include "frame-graph/FrameGraph.h"
 #include "gfx-base/GFXCommandBuffer.h"
 #include "gfx-base/GFXDescriptorSet.h"
 #include "gfx-base/GFXDescriptorSetLayout.h"
@@ -106,6 +107,8 @@ void RenderPipeline::render(const vector<scene::Camera *> &cameras) {
             flow->render(camera);
         }
     }
+
+    RenderPipeline::framegraphGC();
 }
 
 void RenderPipeline::destroyQuadInputAssembler() {
@@ -145,8 +148,6 @@ void RenderPipeline::destroy() {
 
     CC_SAFE_DESTROY(_defaultTexture);
 
-    CC_SAFE_DELETE(_defaultTexture);
-
     PipelineStateManager::destroyAll();
     InstancedBuffer::destroyInstancedBuffer();
 }
@@ -179,10 +180,7 @@ gfx::InputAssembler *RenderPipeline::getIAByRenderArea(const gfx::Rect &renderAr
         static_cast<float>(renderArea.height) / bufferHeight,
     };
 
-    size_t hash = boost::hash_range(reinterpret_cast<const uint64_t *>(&viewport.x),
-                                    reinterpret_cast<const uint64_t *>(&viewport.x + 4));
-
-    const auto iter = _quadIA.find(hash);
+    const auto iter = _quadIA.find(viewport);
     if (iter != _quadIA.end()) {
         return iter->second;
     }
@@ -191,7 +189,7 @@ gfx::InputAssembler *RenderPipeline::getIAByRenderArea(const gfx::Rect &renderAr
     gfx::InputAssembler *ia = nullptr;
     createQuadInputAssembler(_quadIB, &vb, &ia);
     _quadVB.push_back(vb);
-    _quadIA[hash] = ia;
+    _quadIA[viewport] = ia;
 
     updateQuadVertexData(viewport, vb);
 
@@ -206,10 +204,6 @@ bool RenderPipeline::createQuadInputAssembler(gfx::Buffer *quadIB, gfx::Buffer *
     if (*quadVB == nullptr) {
         *quadVB = _device->createBuffer({gfx::BufferUsageBit::VERTEX | gfx::BufferUsageBit::TRANSFER_DST,
                                          gfx::MemoryUsageBit::DEVICE, vbSize, vbStride});
-    }
-
-    if (*quadVB == nullptr) {
-        return false;
     }
 
     // step 2 create input assembler
@@ -239,10 +233,19 @@ gfx::Viewport RenderPipeline::getViewport(scene::Camera *camera) {
         static_cast<uint>(rect.height * scale)};
 }
 
+gfx::Rect RenderPipeline::getScissor(scene::Camera *camera) {
+    auto             scale{_pipelineSceneData->getSharedData()->shadingScale};
+    const gfx::Rect &rect = getRenderArea(camera);
+    return {
+        static_cast<int>(rect.x * scale),
+        static_cast<int>(rect.y * scale),
+        static_cast<uint>(rect.width * scale),
+        static_cast<uint>(rect.height * scale)};
+}
+
 gfx::Rect RenderPipeline::getRenderArea(scene::Camera *camera) {
-    float shadingScale{_pipelineSceneData->getSharedData()->shadingScale};
-    float w{static_cast<float>(camera->window->getWidth()) * shadingScale};
-    float h{static_cast<float>(camera->window->getHeight()) * shadingScale};
+    float w{static_cast<float>(camera->window->getWidth())};
+    float h{static_cast<float>(camera->window->getHeight())};
 
     return {
         static_cast<int>(camera->viewPort.x * w),
@@ -331,6 +334,14 @@ bool RenderPipeline::isOccluded(const scene::Camera *camera, const scene::SubMod
 
     // check query results.
     return _queryPools[0]->getResult(id) == 0;
+}
+
+void RenderPipeline::framegraphGC() {
+    static uint64_t frameCount{0U};
+    static constexpr uint32_t INTERVAL_IN_SECONDS = 30;
+    if (++frameCount % (INTERVAL_IN_SECONDS * 60)) {
+        framegraph::FrameGraph::gc(INTERVAL_IN_SECONDS * 60);
+    }
 }
 
 } // namespace pipeline
