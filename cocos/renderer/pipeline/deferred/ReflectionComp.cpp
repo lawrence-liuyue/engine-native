@@ -5,18 +5,20 @@ namespace cc {
 
 ReflectionComp::~ReflectionComp() {
 
-    CC_SAFE_DESTROY(_compShader);
+    CC_SAFE_DESTROY(_compShader[0]);
+    CC_SAFE_DESTROY(_compShader[1]);
     CC_SAFE_DESTROY(_compDescriptorSetLayout);
     CC_SAFE_DESTROY(_compPipelineLayout);
-    CC_SAFE_DESTROY(_compPipelineState);
+    CC_SAFE_DESTROY(_compPipelineState[0]);
+    CC_SAFE_DESTROY(_compPipelineState[1]);
     CC_SAFE_DESTROY(_compDescriptorSet);
 
-    CC_SAFE_DESTROY(_compDenoiseShader);
-    CC_SAFE_DESTROY(_compDenoiseShaderEnvmap);
+    CC_SAFE_DESTROY(_compDenoiseShader[0]);
+    CC_SAFE_DESTROY(_compDenoiseShader[1]);
     CC_SAFE_DESTROY(_compDenoiseDescriptorSetLayout);
     CC_SAFE_DESTROY(_compDenoisePipelineLayout);
-    CC_SAFE_DESTROY(_compDenoisePipelineState);
-    CC_SAFE_DESTROY(_compDenoisePipelineStateEnvmap);
+    CC_SAFE_DESTROY(_compDenoisePipelineState[0]);
+    CC_SAFE_DESTROY(_compDenoisePipelineState[1]);
     CC_SAFE_DESTROY(_compDenoiseDescriptorSet);
 
     CC_SAFE_DESTROY(_localDescriptorSetLayout);
@@ -27,16 +29,18 @@ ReflectionComp::~ReflectionComp() {
 namespace {
 struct ConstantBuffer {
     Mat4 matView;
-    Mat4 matViewProj;   // view projection矩阵
+    Mat4 matProjInv;
+    Mat4 matViewProj;       // view projection矩阵
     Mat4 matViewProjInv;    // projection逆矩阵
-    Vec4 viewPort;      // lighting viewport
-    Vec2 texSize;       // 反射纹理大小
+    Vec4 viewPort;          // lighting viewport
+    Vec2 texSize;           // 反射纹理大小
 };
+
 } // namespace
 
 void ReflectionComp::applyTexSize(uint width, uint height, const Mat4 &matView,
                                   const Mat4& matViewProj, const Mat4& matViewProjInv,
-                                  const Vec4 &viewPort) {
+                                  const Mat4& matProjInv, const Vec4 &viewPort) {
     uint globalWidth  = width;
     uint globalHeight = height;
     uint groupWidth   = this->getGroupSizeX();
@@ -47,6 +51,7 @@ void ReflectionComp::applyTexSize(uint width, uint height, const Mat4 &matView,
 
     ConstantBuffer constants;
     constants.matView       = matView;
+    constants.matProjInv    = matProjInv;
     constants.matViewProj   = matViewProj;
     constants.matViewProjInv    = matViewProjInv;
     constants.viewPort      = viewPort;
@@ -114,24 +119,26 @@ void ReflectionComp::init(gfx::Device *dev, uint groupSizeX, uint groupSizeY) {
     _barrierBeforeDenoise.push_back(_device->getTextureBarrier(infoBeforeDenoise2));
     _barrierAfterDenoise.push_back(_device->getTextureBarrier(infoAfterDenoise));
 
-    initReflectionRes();
-    initDenoiseRes();
-    //initDenoiseResEnvmap();
-}
 
-void ReflectionComp::initReflectionRes() {
     _compConstantsBuffer = _device->createBuffer({gfx::BufferUsage::UNIFORM,
                                                   gfx::MemoryUsage::DEVICE | gfx::MemoryUsage::HOST,
-                                                  (sizeof(Mat4) * 3 + sizeof(Vec2) + sizeof(Vec4) + 15) / 16 * 16});
+                                                  (sizeof(Mat4) * 4 + sizeof(Vec2) + sizeof(Vec4) + 15) / 16 * 16});
 
-    ShaderSources<ComputeShaderSource> sources;
+    initReflectionRes();
+    initDenoiseRes();
+}
+
+void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) {
     sources.glsl4 = StringUtil::format(
         R"(
-        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        #define CC_USE_ENVMAP %d
+
+        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
 
         layout(set = 0, binding = 0) uniform Constants
         {
             mat4 matView;
+            mat4 matProjInv;
             mat4 matViewProj;
             mat4 matViewProjInv;
             vec4 viewPort;
@@ -150,10 +157,10 @@ void ReflectionComp::initReflectionRes() {
 
         vec4 screen2WS(vec3 coord) {
             vec4 ndc = vec4(
-                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
-                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
-                coord.z,
-                1.0
+                       2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                       2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                       coord.z,
+                       1.0
             );
 
             vec4 world = matViewProjInv * ndc;
@@ -166,13 +173,13 @@ void ReflectionComp::initReflectionRes() {
             _HorizontalPlaneHeightWS = (cc_matWorld * vec4(0,0,0,1)).y;
             vec2 uv = vec2(gl_GlobalInvocationID.xy) / texSize;
             vec4 depValue = texture(depth, uv);
-            if (depValue.r == 1.0) {
-                return;
-            }
-
-            vec2 screenPos = uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y);
+            ivec2 screenPos = ivec2(uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y));
             vec3 posWS = screen2WS(vec3(screenPos, depValue.r)).xyz;
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
+
+            #if CC_USE_ENVMAP
+              imageStore(reflectionTex, ivec2(gl_GlobalInvocationID.xy), vec4(0, 0, 0, 1));
+            #endif
 
             vec3 reflectedPosWS = posWS;
             reflectedPosWS.y = reflectedPosWS.y - _HorizontalPlaneHeightWS;
@@ -187,16 +194,24 @@ void ReflectionComp::initReflectionRes() {
             if (earlyExitTest.x >= 0.5 || earlyExitTest.y >= 0.5) return;
 
             vec4 inputPixelSceneColor = texture(lightingTex, uv);
+
+            #if CC_USE_ENVMAP
+              inputPixelSceneColor.a = 0.5;
+            #endif
+
             imageStore(reflectionTex, ivec2(reflectedScreenUV * texSize), inputPixelSceneColor);
         })",
-        _groupSizeX, _groupSizeY);
+        useEnvmap, _groupSizeX, _groupSizeY);
     sources.glsl3 = StringUtil::format(
         R"(
-        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        #define CC_USE_ENVMAP %d
+
+        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
 
         layout(std140) uniform Constants
         {
             mat4 matView;
+            mat4 matProjInv;
             mat4 matViewProj;
             mat4 matViewProjInv;
             vec4 viewPort;
@@ -215,10 +230,10 @@ void ReflectionComp::initReflectionRes() {
 
         vec4 screen2WS(vec3 coord) {
             vec4 ndc = vec4(
-                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
-                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
-                2.0 * coord.z - 1.0,
-                1.0
+                       2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                       2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                       2.0 * coord.z - 1.0,
+                       1.0
             );
 
             vec4 world = matViewProjInv * ndc;
@@ -231,13 +246,13 @@ void ReflectionComp::initReflectionRes() {
             _HorizontalPlaneHeightWS = (cc_matWorld * vec4(0,0,0,1)).y;
             vec2 uv = vec2(gl_GlobalInvocationID.xy) / texSize;
             vec4 depValue = texture(depth, uv);
-            if (depValue.r == 1.0) {
-                return;
-            }
-
             vec2 screenPos = uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y);
             vec3 posWS = screen2WS(vec3(screenPos, depValue.r)).xyz;
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
+
+            #if CC_USE_ENVMAP && (posWS.y - 0.5 > _HorizontalPlaneHeightWS)
+              if (posWS.y - 0.5 > _HorizontalPlaneHeightWS) imageStore(reflectionTex, ivec2(gl_GlobalInvocationID.xy), vec4(0, 0, 0, 1));
+            #endif
 
             vec3 reflectedPosWS = posWS;
             reflectedPosWS.y = reflectedPosWS.y - _HorizontalPlaneHeightWS;
@@ -252,29 +267,41 @@ void ReflectionComp::initReflectionRes() {
             if (earlyExitTest.x >= 0.5 || earlyExitTest.y >= 0.5) return;
 
             vec4 inputPixelSceneColor = texture(lightingTex, uv);
+
+            #if CC_USE_ENVMAP
+              inputPixelSceneColor.a = 0.5;
+            #endif
+
             imageStore(reflectionTex, ivec2(reflectedScreenUV * texSize), inputPixelSceneColor);
         })",
-        _groupSizeX, _groupSizeY);
-    // no compute support in GLES2
+        useEnvmap, _groupSizeX, _groupSizeY);
+}
 
-    gfx::ShaderInfo shaderInfo;
-    shaderInfo.name   = "Compute ";
-    shaderInfo.stages = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
-    shaderInfo.blocks = {
-        {0, 0, "Constants", {
-            {"matView", gfx::Type::MAT4, 1},
-            {"matViewProj", gfx::Type::MAT4, 1},
-            {"matViewProjInv", gfx::Type::MAT4, 1},
-            {"viewPort", gfx::Type::FLOAT4, 1},
-            {"texSize", gfx::Type::FLOAT2, 1},
-            }, 1},
-        {0, 4, "CCLocal", {{"cc_matWorld", gfx::Type::MAT4, 1}, {"cc_matWorldIT", gfx::Type::MAT4, 1}, {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1}}, 1}};
-    shaderInfo.samplerTextures = {
-        {0, 1, "lightingTex", gfx::Type::SAMPLER2D, 1},
-        {0, 2, "depth", gfx::Type::SAMPLER2D, 1}};
-    shaderInfo.images = {
-        {0, 3, "reflectionTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
-    _compShader = _device->createShader(shaderInfo);
+void ReflectionComp::initReflectionRes() {
+    for (int i = 0; i < 2; ++i) {
+        ShaderSources<ComputeShaderSource> sources;
+        getReflectorShader(sources, i);
+
+        gfx::ShaderInfo shaderInfo;
+        shaderInfo.name   = "Compute ";
+        shaderInfo.stages = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
+        shaderInfo.blocks = {
+            {0, 0, "Constants", {
+                {"matView", gfx::Type::MAT4, 1},
+                {"matProjInv", gfx::Type::MAT4, 1},
+                {"matViewProj", gfx::Type::MAT4, 1},
+                {"matViewProjInv", gfx::Type::MAT4, 1},
+                {"viewPort", gfx::Type::FLOAT4, 1},
+                {"texSize", gfx::Type::FLOAT2, 1},
+                }, 1},
+            {0, 4, "CCLocal", {{"cc_matWorld", gfx::Type::MAT4, 1}, {"cc_matWorldIT", gfx::Type::MAT4, 1}, {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1}}, 1}};
+        shaderInfo.samplerTextures = {
+            {0, 1, "lightingTex", gfx::Type::SAMPLER2D, 1},
+            {0, 2, "depth", gfx::Type::SAMPLER2D, 1}};
+        shaderInfo.images = {
+            {0, 3, "reflectionTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
+        _compShader[i] = _device->createShader(shaderInfo);
+    }
 
     gfx::DescriptorSetLayoutInfo dslInfo;
     dslInfo.bindings.push_back({0, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
@@ -288,319 +315,262 @@ void ReflectionComp::initReflectionRes() {
 
     _compPipelineLayout = _device->createPipelineLayout({{_compDescriptorSetLayout}});
 
-    gfx::PipelineStateInfo pipelineInfo;
-    pipelineInfo.shader         = _compShader;
-    pipelineInfo.pipelineLayout = _compPipelineLayout;
-    pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
+    for (int i = 0; i < 2; ++i) {
+        gfx::PipelineStateInfo pipelineInfo;
+        pipelineInfo.shader         = _compShader[i];
+        pipelineInfo.pipelineLayout = _compPipelineLayout;
+        pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
 
-    _compPipelineState = _device->createPipelineState(pipelineInfo);
+        _compPipelineState[i] = _device->createPipelineState(pipelineInfo);
+    }
+}
+
+void ReflectionComp::getDenoiseShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) {
+    sources.glsl4 = StringUtil::format(
+        R"(
+        #define CC_USE_ENVMAP %d
+        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
+        layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
+        layout(set = 1, binding = %d, rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        #if CC_USE_ENVMAP == 1
+          layout(set = 0, binding = 1) uniform samplerCube envMap;
+          layout(set = 0, binding = 2) uniform sampler2D depth;
+          layout(set = 0, binding = 3) uniform Constants
+          {
+              mat4 matView;
+              mat4 matProjInv;
+              mat4 matViewProj;
+              mat4 matViewProjInv;
+              vec4 viewPort;
+              vec2 texSize;
+          };
+
+          vec4 screen2ES(vec3 coord) {
+              vec4 ndc = vec4(2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                              2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                              coord.z,
+                              1.0);
+
+              vec4 eye = matProjInv * ndc;
+              eye = eye / eye.w;
+              return eye;
+          }
+
+          vec3 calEnvmapUV(vec3 eyeCoord) {
+              vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
+              vec3 planeNormalES = normalize((matView * planeNornalWS).xyz);
+              vec3 incidenceES = normalize(eyeCoord);
+              vec3 reflectionES = normalize(reflect(incidenceES, planeNormalES));
+              return normalize(incidenceES + reflectionES);
+          }
+
+          vec4 sampleEnvmap(ivec2 id) {
+              vec2 uv = vec2(id) / texSize;
+              vec4 depValue = texture(depth, uv);
+              vec2 screenPos = uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y);
+              vec3 posES = screen2ES(vec3(screenPos, depValue.r)).xyz;
+              vec3 envmapUV = calEnvmapUV(posES);
+              return texture(envMap, envmapUV);
+          }
+        #endif
+
+        void main() {
+            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
+            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
+            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
+            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+
+            vec4 best = center;
+            best = right.a > best.a + 0.1 ? right : best;
+            best = bottom.a > best.a + 0.1 ? bottom : best;
+            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+
+            #if !CC_USE_ENVMAP
+              vec4 res = best.a > center.a + 0.1 ? best : center;
+              if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(0, 0), res);
+
+              res = best.a > right.a + 0.1 ? best : right;
+              if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(0, 1), res);
+
+              res = best.a > bottom.a + 0.1 ? best : bottom;
+              if (res.xyz != vec3(0,0, 0)) imageStore(denoiseTex, id + ivec2(1, 0), res);
+
+              res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+              if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(1, 1), res);
+            #else
+              vec4 res = best.a > center.a + 0.1 ? best : center;
+              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id) : res;
+              imageStore(denoiseTex, id + ivec2(0, 0), res);
+
+              res = best.a > right.a + 0.1 ? best : right;
+              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id + ivec2(0, 1)) : res;
+              imageStore(denoiseTex, id + ivec2(0, 1), res);
+
+              res = best.a > bottom.a + 0.1 ? best : bottom;
+              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id + ivec2(1, 0)) : res;
+              imageStore(denoiseTex, id + ivec2(1, 0), res);
+
+              res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id + ivec2(1, 1)) : res;
+              imageStore(denoiseTex, id + ivec2(1, 1), res);
+            #endif
+        })",
+        useEnvmap, _groupSizeX, _groupSizeY, pipeline::REFLECTIONSTORAGE::BINDING);
+    sources.glsl3 = StringUtil::format(
+        R"(
+        #define CC_USE_ENVMAP %d
+        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
+        uniform sampler2D reflectionTex;
+
+        #if CC_USE_ENVMAP
+          uniform samplerCube envMap;
+          uniform sampler2D depth;
+          layout(std140) uniform Constants
+          {
+              mat4 matView;
+              mat4 matProjInv;
+              mat4 matViewProj;
+              mat4 matViewProjInv;
+              vec4 viewPort;
+              vec2 texSize;
+          };
+        #endif
+
+        layout(rgba8) writeonly uniform lowp image2D denoiseTex;
+
+        #if CC_USE_ENVMAP
+          vec4 screen2ES(vec3 coord) {
+              vec4 ndc = vec4(2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
+                              2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
+                              2.0 * coord.z - 1.0,
+                              1.0);
+
+              vec4 eye = matProjInv * ndc;
+              eye = eye / eye.w;
+              return eye;
+          }
+
+          vec3 calEnvmapUV(vec3 eyeCoord) {
+              vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
+              vec3 planeNormalES = normalize((matView * planeNornalWS).xyz);
+              vec3 incidenceES = normalize(eyeCoord);
+              vec3 reflectionES = normalize(reflect(incidenceES, planeNormalES));
+              return normalize(incidenceES + reflectionES);
+          }
+
+          vec4 sampleEnvmap(ivec2 id) {
+              vec2 uv = vec2(id) / texSize;
+              vec4 depValue = texture(depth, uv);
+              vec2 screenPos = uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y);
+              vec3 posES = screen2ES(vec3(screenPos, depValue.r)).xyz;
+              vec3 envmapUV = calEnvmapUV(posES);
+              return texture(envMap, envmapUV);
+          }
+        #endif
+
+        void main() {
+            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
+            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
+            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
+            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+
+            vec4 best = center;
+            best = right.a > best.a + 0.1 ? right : best;
+            best = bottom.a > best.a + 0.1 ? bottom : best;
+            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+
+            #if !CC_USE_ENVMAP
+              vec4 res = best.a > center.a + 0.1 ? best : center;
+              if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(0, 0), res);
+
+              res = best.a > right.a + 0.1 ? best : right;
+              if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(0, 1), res);
+
+              res = best.a > bottom.a + 0.1 ? best : bottom;
+              if (res.xyz != vec3(0,0, 0)) imageStore(denoiseTex, id + ivec2(1, 0), res);
+
+              res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+              if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(1, 1), res);
+            #else
+              vec4 res = best.a > center.a + 0.1 ? best : center;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id) : res;
+              imageStore(denoiseTex, id + ivec2(0, 0), res);
+
+              res = best.a > right.a + 0.1 ? best : right;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id + ivec2(0, 1)) : res;
+              imageStore(denoiseTex, id + ivec2(0, 1), res);
+
+              res = best.a > bottom.a + 0.1 ? best : bottom;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id + ivec2(1, 0)) : res;
+              imageStore(denoiseTex, id + ivec2(1, 0), res);
+
+              res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id + ivec2(1, 1)) : res;
+              imageStore(denoiseTex, id + ivec2(1, 1), res);
+            #endif
+        })",
+        useEnvmap, _groupSizeX, _groupSizeY);
 }
 
 void ReflectionComp::initDenoiseRes() {
-    ShaderSources<ComputeShaderSource> sources;
-    sources.glsl4 = StringUtil::format(
-        R"(
-        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
-        layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
-        layout(set = 1, binding = 12, rgba8) writeonly uniform lowp image2D denoiseTex;
+    for (int i = 0; i < 2; ++i) {
+        ShaderSources<ComputeShaderSource> sources;
+        getDenoiseShader(sources, i);
 
-        void main() {
-            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
+        gfx::ShaderInfo shaderInfo;
+        shaderInfo.name            = "Compute ";
+        shaderInfo.stages          = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
 
-            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
-            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
-            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
-            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
+        if (i == 0) {
+            shaderInfo.blocks          = {};
+            shaderInfo.samplerTextures = {
+                {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1}};
+        } else {
+            shaderInfo.blocks = {
+                {0, 0, "Constants", {
+                    {"matView", gfx::Type::MAT4, 1},
+                    {"matProjInv", gfx::Type::MAT4, 1},
+                    {"matViewProj", gfx::Type::MAT4, 1},
+                    {"matViewProjInv", gfx::Type::MAT4, 1},
+                    {"viewPort", gfx::Type::FLOAT4, 1},
+                    {"texSize", gfx::Type::FLOAT2, 1},
+                    }, 1},
+                };
+            shaderInfo.samplerTextures = {
+                {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1},
+                {0, 1, "envMap", gfx::Type::SAMPLER_CUBE, 1},
+                {0, 2, "depth", gfx::Type::SAMPLER2D, 1}};
+        }
 
-            vec4 best = center;
-            best = right.a > best.a + 0.1 ? right : best;
-            best = bottom.a > best.a + 0.1 ? bottom : best;
-            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
+        shaderInfo.images = {
+            {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
 
-            imageStore(denoiseTex, id + ivec2(0, 0), best.a > center.a + 0.1 ? best : center);
-            imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
-            imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
-            imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
-        })",
-        _groupSizeX, _groupSizeY, pipeline::REFLECTIONSTORAGE::BINDING);
-    sources.glsl3 = StringUtil::format(
-        R"(
-        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
-        uniform sampler2D reflectionTex;
-        layout(rgba8) writeonly uniform lowp image2D denoiseTex;
-
-        void main() {
-            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
-
-            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
-            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
-            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
-            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
-
-            vec4 best = center;
-            best = right.a > best.a + 0.1 ? right : best;
-            best = bottom.a > best.a + 0.1 ? bottom : best;
-            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
-
-            imageStore(denoiseTex, id + ivec2(0, 0), best.a > center.a + 0.1 ? best : center);
-            imageStore(denoiseTex, id + ivec2(0, 1), best.a > right.a + 0.1 ? best : right);
-            imageStore(denoiseTex, id + ivec2(1, 0), best.a > bottom.a + 0.1 ? best : bottom);
-            imageStore(denoiseTex, id + ivec2(1, 1), best.a > bottomRight.a + 0.1 ? best : bottomRight);
-        })",
-        _groupSizeX, _groupSizeY);
-    // no compute support in GLES2
-
-    gfx::ShaderInfo shaderInfo;
-    shaderInfo.name            = "Compute ";
-    shaderInfo.stages          = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
-    shaderInfo.blocks          = {};
-    shaderInfo.samplerTextures = {
-        {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1}};
-    shaderInfo.images = {
-        {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
-    _compDenoiseShader = _device->createShader(shaderInfo);
+        _compDenoiseShader[i] = _device->createShader(shaderInfo);
+    }
 
     gfx::DescriptorSetLayoutInfo dslInfo;
     dslInfo.bindings.push_back({0, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
-    dslInfo.bindings.push_back({1, gfx::DescriptorType::STORAGE_IMAGE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({1, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({2, gfx::DescriptorType::SAMPLER_TEXTURE, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({3, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
+    dslInfo.bindings.push_back({4, gfx::DescriptorType::UNIFORM_BUFFER, 1, gfx::ShaderStageFlagBit::COMPUTE});
     _compDenoiseDescriptorSetLayout = _device->createDescriptorSetLayout(dslInfo);
     _compDenoisePipelineLayout      = _device->createPipelineLayout({{_compDenoiseDescriptorSetLayout, _localDescriptorSetLayout}});
-
     _compDenoiseDescriptorSet = _device->createDescriptorSet({_compDenoiseDescriptorSetLayout});
 
-    gfx::PipelineStateInfo pipelineInfo;
-    pipelineInfo.shader         = _compDenoiseShader;
-    pipelineInfo.pipelineLayout = _compDenoisePipelineLayout;
-    pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
+    for (int i = 0; i < 2; ++i) {
+        gfx::PipelineStateInfo pipelineInfo;
+        pipelineInfo.shader         = _compDenoiseShader[i];
+        pipelineInfo.pipelineLayout = _compDenoisePipelineLayout;
+        pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
 
-    _compDenoisePipelineState = _device->createPipelineState(pipelineInfo);
-}
-
-void ReflectionComp::initDenoiseResEnvmap() {
-    ShaderSources<ComputeShaderSource> sources;
-    sources.glsl4 = StringUtil::format(
-        R"(
-        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
-        layout(set = 0, binding = 0) uniform sampler2D reflectionTex;
-        layout(set = 0, binding = 1) uniform samplerCube envMap;
-        layout(set = 0, binding = 2) uniform sampler2D depth;
-        layout(set = 0, binding = 3) uniform Constants
-        {
-            mat4 matView;
-            mat4 matViewProj;
-            mat4 matViewProjInv;
-            vec4 viewPort;
-            vec2 texSize;
-        };
-
-        layout(set = 0, binding = 4, std140) uniform CCLocal
-        {
-            mat4 cc_matWorld;
-            mat4 cc_matWorldIT;
-            vec4 cc_lightingMapUVParam;
-        };
-
-        layout(set = 1, binding = 12, rgba8) writeonly uniform lowp image2D denoiseTex;
-
-        vec4 screen2Eye(vec3 coord) {
-            vec4 ndc = vec4(
-                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
-                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
-                coord.z,
-                1.0
-            );
-
-            vec4 eye = matViewProjInv * ndc;
-            eye = eye / eye.w;
-            return eye;
-        }
-
-        vec3 calEnvmapUV(vec3 eyeCoord) {
-            vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
-            vec3 planeNornalES = normalize((matView * planeNornalWS).xyz);
-            vec3 incidence = normalize(-eyeCoord.xyz);
-            vec3 reflection = normalize(reflect(incidence, planeNornalES));
-            return normalize(incidence + reflection);
-        }
-
-        vec4 getEnvmap(ivec2 id) {
-            vec2 screenSize = viewPort.zw;
-            vec2 uv = vec2(float(id.x) / texSize.x, float(id.y) / texSize.y);
-            float depthv = texture(depth, uv).x;
-            vec2 screenPos = uv * screenSize;
-            vec3 posES = screen2Eye(vec3(screenPos, depthv)).xyz;
-            vec3 envmapUV = calEnvmapUV(posES);
-            vec4 envValue = texture(envMap, envmapUV);
-            return envValue;
-        }
-
-        void main() {
-            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
-
-            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
-            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
-            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
-            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
-
-            vec4 best = center;
-            best = right.a > best.a + 0.1 ? right : best;
-            best = bottom.a > best.a + 0.1 ? bottom : best;
-            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
-
-            vec4 envValue = getEnvmap(id);
-
-            vec4 res = best.a > center.a + 0.1 ? best : center;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(0, 0), res);
-
-            res = best.a > right.a + 0.1 ? best : right;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(0, 1), res);
-
-            res = best.a > bottom.a + 0.1 ? best : bottom;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(1, 0), res);
-
-            res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(1, 1), res);
-
-        })",
-        _groupSizeX, _groupSizeY, pipeline::REFLECTIONSTORAGE::BINDING);
-    sources.glsl3 = StringUtil::format(
-        R"(
-        layout(local_size_x = %d, local_size_y = %d, local_size_z = 1) in;
-        uniform sampler2D reflectionTex;
-        uniform samplerCube envMap;
-        uniform sampler2D depth;
-        layout(std140) uniform Constants
-        {
-            mat4 matView;
-            mat4 matViewProj;
-            mat4 matViewProjInv;
-            vec4 viewPort;
-            vec2 texSize;
-        };
-
-        layout(std140) uniform CCLocal
-        {
-            mat4 cc_matWorld;
-            mat4 cc_matWorldIT;
-            vec4 cc_lightingMapUVParam;
-        };
-
-        layout(rgba8) writeonly uniform lowp image2D denoiseTex;
-
-        vec4 screen2Eye(vec3 coord) {
-            vec4 ndc = vec4(
-                2.0 * (coord.x - viewPort.x) / viewPort.z - 1.0,
-                2.0 * (coord.y - viewPort.y) / viewPort.w - 1.0,
-                2.0 * coord.z - 1.0,
-                1.0
-            );
-
-            vec4 eye = matViewProjInv * ndc;
-            eye = eye / eye.w;
-            return eye;
-        }
-
-        vec3 calEnvmapUV(vec3 eyeCoord) {
-            vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
-            vec3 planeNornalES = normalize((matView * planeNornalWS).xyz);
-            vec3 incidence = normalize(-eyeCoord.xyz);
-            vec3 reflection = normalize(reflect(incidence, planeNornalES));
-            return normalize(incidence + reflection);
-        }
-
-        vec4 getEnvmap(ivec2 id) {
-            vec2 screenSize = viewPort.zw;
-            vec2 uv = vec2(float(id.x) / texSize.x, float(id.y) / texSize.y);
-            float depthv = texture(depth, uv).x;
-            vec2 screenPos = uv * screenSize;
-            vec3 posES = screen2Eye(vec3(screenPos, depthv)).xyz;
-            vec3 envmapUV = calEnvmapUV(posES);
-            vec4 envValue = texture(envMap, envmapUV);
-            return envValue;//vec4(depthv, 0, 0, 1);
-        }
-
-        void main() {
-            ivec2 id = ivec2(gl_GlobalInvocationID.xy) * 2;
-
-            vec4 center = texelFetch(reflectionTex, id + ivec2(0, 0), 0);
-            vec4 right = texelFetch(reflectionTex, id + ivec2(0, 1), 0);
-            vec4 bottom = texelFetch(reflectionTex, id + ivec2(1, 0), 0);
-            vec4 bottomRight = texelFetch(reflectionTex, id + ivec2(1, 1), 0);
-
-            vec4 best = center;
-            best = right.a > best.a + 0.1 ? right : best;
-            best = bottom.a > best.a + 0.1 ? bottom : best;
-            best = bottomRight.a > best.a + 0.1 ? bottomRight : best;
-
-            vec4 envValue = getEnvmap(id);
-
-            vec4 res = best.a > center.a + 0.1 ? best : center;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(0, 0), res);
-
-            res = best.a > right.a + 0.1 ? best : right;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(0, 1), res);
-
-            res = best.a > bottom.a + 0.1 ? best : bottom;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(1, 0), res);
-
-            res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
-            if (res.xyz == vec3(0, 0, 0)) {
-                res = envValue;
-            }
-            imageStore(denoiseTex, id + ivec2(1, 1), res);
-        })",
-        _groupSizeX, _groupSizeY);
-    // no compute support in GLES2
-
-    gfx::ShaderInfo shaderInfo;
-    shaderInfo.name            = "Compute";
-    shaderInfo.stages          = {{gfx::ShaderStageFlagBit::COMPUTE, getAppropriateShaderSource(sources)}};
-    shaderInfo.blocks = {
-        {0, 3, "Constants", {
-            {"matView", gfx::Type::MAT4, 1},
-            {"matViewProj", gfx::Type::MAT4, 1},
-            {"matViewProjInv", gfx::Type::MAT4, 1},
-            {"viewPort", gfx::Type::FLOAT4, 1},
-            {"texSize", gfx::Type::FLOAT2, 1},
-            }, 1},
-        {0, 4, "CCLocal", {{"cc_matWorld", gfx::Type::MAT4, 1}, {"cc_matWorldIT", gfx::Type::MAT4, 1}, {"cc_lightingMapUVParam", gfx::Type::FLOAT4, 1}}, 1}};
-
-    shaderInfo.samplerTextures = {
-        {0, 0, "reflectionTex", gfx::Type::SAMPLER2D, 1},
-        {0, 1, "envMap", gfx::Type::SAMPLER_CUBE, 1},
-        {0, 0, "depth", gfx::Type::SAMPLER2D, 1},
-        };
-    shaderInfo.images = {
-        {1, 12, "denoiseTex", gfx::Type::IMAGE2D, 1, gfx::MemoryAccessBit::WRITE_ONLY}};
-    _compDenoiseShaderEnvmap = _device->createShader(shaderInfo);
-
-    gfx::PipelineStateInfo pipelineInfo;
-    pipelineInfo.shader         = _compDenoiseShaderEnvmap;
-    pipelineInfo.pipelineLayout = _compDenoisePipelineLayout;
-    pipelineInfo.bindPoint      = gfx::PipelineBindPoint::COMPUTE;
-
-    _compDenoisePipelineStateEnvmap = _device->createPipelineState(pipelineInfo);
+        _compDenoisePipelineState[i] = _device->createPipelineState(pipelineInfo);
+    }
 }
 
 template <typename T>
