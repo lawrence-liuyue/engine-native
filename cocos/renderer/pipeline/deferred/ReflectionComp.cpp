@@ -173,7 +173,7 @@ void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sour
             _HorizontalPlaneHeightWS = (cc_matWorld * vec4(0,0,0,1)).y;
             vec2 uv = vec2(gl_GlobalInvocationID.xy) / texSize;
             vec4 depValue = texture(depth, uv);
-            ivec2 screenPos = ivec2(uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y));
+            vec2 screenPos = vec2(uv * vec2(viewPort.z, viewPort.w) + vec2(viewPort.x, viewPort.y));
             vec3 posWS = screen2WS(vec3(screenPos, depValue.r)).xyz;
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
 
@@ -194,11 +194,6 @@ void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sour
             if (earlyExitTest.x >= 0.5 || earlyExitTest.y >= 0.5) return;
 
             vec4 inputPixelSceneColor = texture(lightingTex, uv);
-
-            #if CC_USE_ENVMAP
-              inputPixelSceneColor.a = 0.5;
-            #endif
-
             imageStore(reflectionTex, ivec2(reflectedScreenUV * texSize), inputPixelSceneColor);
         })",
         useEnvmap, _groupSizeX, _groupSizeY);
@@ -250,7 +245,7 @@ void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sour
             vec3 posWS = screen2WS(vec3(screenPos, depValue.r)).xyz;
             if(posWS.y <= _HorizontalPlaneHeightWS) return;
 
-            #if CC_USE_ENVMAP && (posWS.y - 0.5 > _HorizontalPlaneHeightWS)
+            #if CC_USE_ENVMAP
               if (posWS.y - 0.5 > _HorizontalPlaneHeightWS) imageStore(reflectionTex, ivec2(gl_GlobalInvocationID.xy), vec4(0, 0, 0, 1));
             #endif
 
@@ -267,11 +262,6 @@ void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sour
             if (earlyExitTest.x >= 0.5 || earlyExitTest.y >= 0.5) return;
 
             vec4 inputPixelSceneColor = texture(lightingTex, uv);
-
-            #if CC_USE_ENVMAP
-              inputPixelSceneColor.a = 0.5;
-            #endif
-
             imageStore(reflectionTex, ivec2(reflectedScreenUV * texSize), inputPixelSceneColor);
         })",
         useEnvmap, _groupSizeX, _groupSizeY);
@@ -402,19 +392,19 @@ void ReflectionComp::getDenoiseShader(ShaderSources<ComputeShaderSource> &source
               if (res.xyz != vec3(0, 0, 0)) imageStore(denoiseTex, id + ivec2(1, 1), res);
             #else
               vec4 res = best.a > center.a + 0.1 ? best : center;
-              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id) : res;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id) : res;
               imageStore(denoiseTex, id + ivec2(0, 0), res);
 
               res = best.a > right.a + 0.1 ? best : right;
-              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id + ivec2(0, 1)) : res;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id + ivec2(0, 1)) : res;
               imageStore(denoiseTex, id + ivec2(0, 1), res);
 
               res = best.a > bottom.a + 0.1 ? best : bottom;
-              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id + ivec2(1, 0)) : res;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id + ivec2(1, 0)) : res;
               imageStore(denoiseTex, id + ivec2(1, 0), res);
 
               res = best.a > bottomRight.a + 0.1 ? best : bottomRight;
-              res = res.xyz == vec3(0, 0, 0) ? sampleEnvmap(id + ivec2(1, 1)) : res;
+              res = res == vec4(0, 0, 0, 0) ? sampleEnvmap(id + ivec2(1, 1)) : res;
               imageStore(denoiseTex, id + ivec2(1, 1), res);
             #endif
         })",

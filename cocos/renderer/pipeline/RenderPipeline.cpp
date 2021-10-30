@@ -71,7 +71,7 @@ bool RenderPipeline::initialize(const RenderPipelineInfo &info) {
     return true;
 }
 
-bool RenderPipeline::IsEnvmapEnabled() {
+bool RenderPipeline::isEnvmapEnabled() {
     return _pipelineSceneData->getSharedData()->skybox->useIBL;
 }
 

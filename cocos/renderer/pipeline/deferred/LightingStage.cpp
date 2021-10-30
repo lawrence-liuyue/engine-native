@@ -45,7 +45,6 @@
 #include "scene/RenderScene.h"
 #include "scene/Sphere.h"
 #include "scene/SphereLight.h"
-#include "math/Vec4.h"
 
 namespace cc {
 namespace pipeline {
@@ -691,7 +690,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         reflectDesc->update();
 
         // set 1, subModel->getDescriptorSet(0)
-        cmdBuff->bindPipelineState(const_cast<gfx::PipelineState*>(_reflectionComp->getPipelineState(pipeline->IsEnvmapEnabled())));
+        cmdBuff->bindPipelineState(const_cast<gfx::PipelineState *>(_reflectionComp->getPipelineState(pipeline->isEnvmapEnabled())));
         cmdBuff->bindDescriptorSet(globalSet, reflectDesc);
         cmdBuff->dispatch(_reflectionComp->getDispatchInfo());
     };
@@ -737,7 +736,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         cmdBuff->pipelineBarrier(nullptr, const_cast<gfx::TextureBarrierList &>(_reflectionComp->getBarrierBeforeDenoise()), {reflectionTex, denoiseTex});
 
         // bind descriptor set
-        bool useEnvmap = pipeline->IsEnvmapEnabled();
+        bool useEnvmap = pipeline->isEnvmapEnabled();
         _reflectionComp->getDenoiseDescriptorSet()->bindTexture(0, reflectionTex);
         _reflectionComp->getDenoiseDescriptorSet()->bindSampler(0, _reflectionComp->getSampler());
 
