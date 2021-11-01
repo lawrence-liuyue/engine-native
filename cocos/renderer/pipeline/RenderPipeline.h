@@ -94,7 +94,7 @@ public:
     bool                                           isOccluded(const scene::Camera *camera, const scene::SubModel *subModel);
     bool                                           getOcclusionQueryEnabled() const { return _occlusionQueryEnabled && _device->getCapabilities().supportQuery; }
     void                                           setOcclusionQueryEnabled(bool enable) { _occlusionQueryEnabled = enable; }
-    bool                                           isEnvmapEnabled();
+    bool                                           isEnvmapEnabled() const;
 
     gfx::Viewport           getViewport(scene::Camera *camera);
     gfx::Rect               getScissor(scene::Camera *camera);

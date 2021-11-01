@@ -30,10 +30,10 @@ namespace {
 struct ConstantBuffer {
     Mat4 matView;
     Mat4 matProjInv;
-    Mat4 matViewProj;       // view projection矩阵
-    Mat4 matViewProjInv;    // projection逆矩阵
-    Vec4 viewPort;          // lighting viewport
-    Vec2 texSize;           // 反射纹理大小
+    Mat4 matViewProj;
+    Mat4 matViewProjInv;
+    Vec4 viewPort;          // viewport of lighting pass
+    Vec2 texSize;           // texture size of reflect texture
 };
 
 } // namespace
@@ -128,7 +128,7 @@ void ReflectionComp::init(gfx::Device *dev, uint groupSizeX, uint groupSizeY) {
     initDenoiseRes();
 }
 
-void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) {
+void ReflectionComp::getReflectorShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) const {
     sources.glsl4 = StringUtil::format(
         R"(
         #define CC_USE_ENVMAP %d
@@ -315,7 +315,7 @@ void ReflectionComp::initReflectionRes() {
     }
 }
 
-void ReflectionComp::getDenoiseShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) {
+void ReflectionComp::getDenoiseShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) const {
     sources.glsl4 = StringUtil::format(
         R"(
         #define CC_USE_ENVMAP %d

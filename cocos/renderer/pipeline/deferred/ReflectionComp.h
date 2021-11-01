@@ -24,8 +24,8 @@ public:
     ReflectionComp() = default;
     ~ReflectionComp();
     void init(gfx::Device* dev, uint groupSizeX, uint groupSizeY);
-    void getReflectorShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap);
-    void getDenoiseShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap);
+    void getReflectorShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) const;
+    void getDenoiseShader(ShaderSources<ComputeShaderSource> &sources, bool useEnvmap) const;
     void initReflectionRes();
     void initDenoiseRes();
     void initDenoiseResEnvmap();
