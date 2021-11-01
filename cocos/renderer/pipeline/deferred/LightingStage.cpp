@@ -656,7 +656,7 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         auto *pipeline = static_cast<DeferredPipeline *>(_pipeline);
 
         gfx::Viewport vp = pipeline->getViewport(camera);
-        Vec4 value = Vec4(vp.left, vp.top, vp.width, vp.height);
+        Vec4 value = Vec4(vp.left, vp.top, static_cast<float>(vp.width), static_cast<float>(vp.height));
         _reflectionComp->applyTexSize(_ssprTexWidth, _ssprTexHeight, camera->matView, camera->matViewProj,
                                       camera->matViewProjInv, camera->matProjInv, value);
 
@@ -671,11 +671,6 @@ void LightingStage::fgSsprPass(scene::Camera *camera) {
         cmdBuff->pipelineBarrier(nullptr, const_cast<gfx::TextureBarrierList &>(barrierBeforeReflector), {texDepth});
 
         // step 2 bind descriptors
-        // layout(set = 0, binding = 0) uniform Constants {  mat4 matViewProj; vec2 texSize; };
-        // layout(set = 0, binding = 1) uniform sampler2D lightingTex;
-        // layout(set = 0, binding = 2) uniform sampler2D depth;
-        // layout(set = 0, binding = 3, rgba8) writeonly uniform lowp image2D reflectionTex;
-        // set 0
         gfx::DescriptorSet *reflectDesc = _reflectionComp->getDescriptorSet();
         gfx::Sampler *      sampler     = _reflectionComp->getSampler();
         gfx::Buffer *       constBuffer = _reflectionComp->getConstantsBuffer();
