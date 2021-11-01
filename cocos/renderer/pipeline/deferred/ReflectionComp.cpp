@@ -351,8 +351,7 @@ void ReflectionComp::getDenoiseShader(ShaderSources<ComputeShaderSource> &source
               vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
               vec3 planeNormalES = normalize((matView * planeNornalWS).xyz);
               vec3 incidenceES = normalize(eyeCoord);
-              vec3 reflectionES = normalize(reflect(incidenceES, planeNormalES));
-              return normalize(incidenceES + reflectionES);
+              return normalize(reflect(incidenceES, planeNormalES));
           }
 
           vec4 sampleEnvmap(ivec2 id) {
@@ -447,8 +446,7 @@ void ReflectionComp::getDenoiseShader(ShaderSources<ComputeShaderSource> &source
               vec4 planeNornalWS = vec4(0, 1.0, 0, 1.0);
               vec3 planeNormalES = normalize((matView * planeNornalWS).xyz);
               vec3 incidenceES = normalize(eyeCoord);
-              vec3 reflectionES = normalize(reflect(incidenceES, planeNormalES));
-              return normalize(incidenceES + reflectionES);
+              return normalize(reflect(incidenceES, planeNormalES));
           }
 
           vec4 sampleEnvmap(ivec2 id) {
