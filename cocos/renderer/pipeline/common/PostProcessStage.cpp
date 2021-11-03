@@ -39,7 +39,6 @@
 #include "pipeline/helper/Utils.h"
 #include "scene/SubModel.h"
 
-
 namespace cc {
 namespace pipeline {
 namespace {
@@ -110,8 +109,9 @@ void PostProcessStage::render(scene::Camera *camera) {
         _clearColors[0].z = camera->clearColor.z;
     }
     _clearColors[0].w = camera->clearColor.w;
-
-    auto *pipeline  = _pipeline;
+    _renderArea       = RenderPipeline::getRenderArea(camera);
+    _inputAssembler   = _pipeline->getIAByRenderArea(_renderArea);
+    auto *pipeline = _pipeline;
     float shadingScale{_pipeline->getPipelineSceneData()->getSharedData()->shadingScale};
     auto  postSetup = [&](framegraph::PassNodeBuilder &builder, RenderData &data) {
         if (pipeline->getBloomEnabled()) {
@@ -147,8 +147,9 @@ void PostProcessStage::render(scene::Camera *camera) {
             }
         }
 
-        colorAttachmentInfo.beginAccesses = {gfx::AccessType::COLOR_ATTACHMENT_WRITE};
-        colorAttachmentInfo.endAccesses   = {gfx::AccessType::COLOR_ATTACHMENT_WRITE};
+        gfx::AccessType accessType{camera->window->swapchain ? gfx::AccessType::COLOR_ATTACHMENT_WRITE : gfx::AccessType::FRAGMENT_SHADER_READ_TEXTURE};
+        colorAttachmentInfo.beginAccesses.push_back(accessType);
+        colorAttachmentInfo.endAccesses.push_back(accessType);
 
         gfx::TextureInfo textureInfo = {
             gfx::TextureType::TEX2D,
@@ -157,6 +158,9 @@ void PostProcessStage::render(scene::Camera *camera) {
             static_cast<uint>(camera->window->getWidth() * shadingScale),
             static_cast<uint>(camera->window->getHeight() * shadingScale),
         };
+        if (shadingScale != 1.F) {
+            textureInfo.usage |= gfx::TextureUsageBit::TRANSFER_SRC;
+        }
         data.backBuffer = builder.create(fgStrHandlePostProcessOutTexture, textureInfo);
         data.backBuffer = builder.write(data.backBuffer, colorAttachmentInfo);
         builder.writeToBlackboard(fgStrHandlePostProcessOutTexture, data.backBuffer);
@@ -198,21 +202,20 @@ void PostProcessStage::render(scene::Camera *camera) {
             auto *const  sceneData = pipeline->getPipelineSceneData();
             scene::Pass *pv        = sceneData->getSharedData()->pipelinePostPass;
             gfx::Shader *sd        = sceneData->getSharedData()->pipelinePostPassShader;
-            float                  shadingScale{sceneData->getSharedData()->shadingScale};
+            float        shadingScale{sceneData->getSharedData()->shadingScale};
             // get pso and draw quad
-            gfx::InputAssembler *      ia       = pipeline->getIAByRenderArea(RenderPipeline::getRenderArea(camera));
-            gfx::PipelineState * pso = PipelineStateManager::getOrCreatePipelineState(pv, sd, ia, renderPass);
+            gfx::PipelineState *       pso      = PipelineStateManager::getOrCreatePipelineState(pv, sd, _inputAssembler, renderPass);
             pipeline::GlobalDSManager *globalDS = pipeline->getGlobalDSManager();
             gfx::Sampler *             sampler  = shadingScale < 1.F ? globalDS->getPointSampler() : globalDS->getLinearSampler();
-            
+
             pv->getDescriptorSet()->bindTexture(0, table.getRead(data.outColorTex));
             pv->getDescriptorSet()->bindSampler(0, sampler);
             pv->getDescriptorSet()->update();
 
             cmdBuff->bindPipelineState(pso);
             cmdBuff->bindDescriptorSet(materialSet, pv->getDescriptorSet());
-            cmdBuff->bindInputAssembler(ia);
-            cmdBuff->draw(ia);
+            cmdBuff->bindInputAssembler(_inputAssembler);
+            cmdBuff->draw(_inputAssembler);
         }
 
         _uiPhase->render(camera, renderPass);
